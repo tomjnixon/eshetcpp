@@ -112,17 +112,11 @@ public:
 
   // register a callback to be called when the connection has been made
   void on_connect(std::function<void(void)> cb) {
-    std::lock_guard<std::mutex> guard(connect_callbacks_mut);
+    std::lock_guard<std::mutex> guard(conn_mut);
 
-    bool is_connected;
-    {
-      std::lock_guard<std::mutex> guard(conn_mut);
-      is_connected = connected;
-    }
-
-    // do this in the connect_callbacks_mut mutex to ensure it doesn't get
+    // do this in the conn_mut mutex to ensure it doesn't get
     // called twice
-    if (is_connected) {
+    if (connected) {
       cb();
     }
 
@@ -144,15 +138,15 @@ public:
     }
 
     cv_guard.unlock();
-    disconnect_cv.notify_one();
+    conn_cv.notify_one();
     cv_guard.lock();
 
-    disconnect_cv.wait(cv_guard, [&] { return !connected; });
+    conn_cv.wait(cv_guard, [&] { return !connected; });
   }
 
   // register a state
   void state_register(const std::string &path, std::function<void(Result)> cb) {
-    std::lock_guard<std::mutex> guard(conn_mut);
+    std::lock_guard<std::mutex> guard(send_mut);
     start_msg(0x40);
     uint16_t id = get_id();
     write16(id);
@@ -166,7 +160,7 @@ public:
   template <typename T>
   void state_changed(const std::string &path, const T &value,
                      std::function<void(Result)> cb) {
-    std::lock_guard<std::mutex> guard(conn_mut);
+    std::lock_guard<std::mutex> guard(send_mut);
     start_msg(0x41);
     uint16_t id = get_id();
     write16(id);
@@ -179,7 +173,7 @@ public:
 
   // notify observers that a registered state is unknown
   void state_unknown(const std::string &path, std::function<void(Result)> cb) {
-    std::lock_guard<std::mutex> guard(conn_mut);
+    std::lock_guard<std::mutex> guard(send_mut);
     start_msg(0x42);
     uint16_t id = get_id();
     write16(id);
@@ -194,14 +188,14 @@ public:
   // XXX: should call cb when disconnected
   void state_observe(const std::string &path,
                      std::function<void(StateResult)> cb) {
-    std::lock_guard<std::mutex> guard(conn_mut);
+    std::lock_guard<std::mutex> guard(send_mut);
     start_msg(0x43);
     uint16_t id = get_id();
     write16(id);
     write_string(path);
     add_reply_cb(id, cb);
     {
-      std::lock_guard<std::mutex> guard(reply_callbacks_mut);
+      std::lock_guard<std::mutex> guard(callbacks_mut);
       state_callbacks.emplace(std::make_pair(path, std::move(cb)));
     }
     write_size();
@@ -299,7 +293,7 @@ private:
       msgpack::object_handle oh =
           msgpack::unpack((char *)&msg[pos], msg.size() - pos);
 
-      std::lock_guard<std::mutex> guard(reply_callbacks_mut);
+      std::lock_guard<std::mutex> guard(callbacks_mut);
       auto it = state_callbacks.find(path);
       if (it == state_callbacks.end())
         // missing callback
@@ -313,7 +307,7 @@ private:
         // space at the end
         throw ProtocolError();
 
-      std::lock_guard<std::mutex> guard(reply_callbacks_mut);
+      std::lock_guard<std::mutex> guard(callbacks_mut);
       auto it = state_callbacks.find(path);
       if (it == state_callbacks.end())
         // missing callback
@@ -327,47 +321,41 @@ private:
   }
 
   void reply(uint16_t id, AnyResult result) {
-    std::lock_guard<std::mutex> guard(reply_callbacks_mut);
+    std::unique_lock<std::mutex> guard(callbacks_mut);
     auto it = reply_callbacks.find(id);
     if (it == reply_callbacks.end())
       // missing callback
       throw ProtocolError();
 
-    // XXX: remove from reply_callbacks
+    auto nh = reply_callbacks.extract(it);
+    guard.unlock();
 
     if (!std::visit(
             [&](auto &cb) { return convert_variant(std::move(result), cb); },
-            it->second))
+            nh.mapped()))
       // wrong type of return
       throw ProtocolError();
   }
 
-  void do_disconnect() {
-    std::unique_lock<std::mutex> cv_guard(conn_mut);
+  void do_disconnect(std::unique_lock<std::mutex> conn_mut_guard) {
     if (sockfd >= 0) {
       close(sockfd);
       sockfd = -1;
       connected = false;
-      cv_guard.unlock();
-      disconnect_cv.notify_one();
+      conn_mut_guard.unlock();
+      conn_cv.notify_one();
     }
   }
 
   bool ensure_connected() {
     {
-      bool this_disconnect;
-      bool this_connected;
-      {
-        std::lock_guard<std::mutex> guard(conn_mut);
-        this_disconnect = should_disconnect;
-        this_connected = connected;
-      }
-      if (this_disconnect) {
-        if (this_connected)
-          do_disconnect();
+      std::unique_lock<std::mutex> guard(conn_mut);
+      if (should_disconnect) {
+        if (connected)
+          do_disconnect(std::move(guard));
         return false;
       } else {
-        if (this_connected)
+        if (connected)
           return true;
       }
     }
@@ -376,20 +364,16 @@ private:
     std::chrono::seconds max_delay(30);
 
     while (true) {
+      std::unique_lock<std::mutex> guard(conn_mut);
       if (connect_once()) {
-        std::lock_guard<std::mutex> guard(connect_callbacks_mut);
         for (auto &cb : connect_callbacks) {
           cb();
         }
         return true;
       }
 
-      {
-        std::unique_lock<std::mutex> cv_guard(conn_mut);
-        if (disconnect_cv.wait_for(cv_guard, delay,
-                                   [&] { return should_disconnect; }))
-          return false;
-      }
+      if (conn_cv.wait_for(guard, delay, [&] { return should_disconnect; }))
+        return false;
 
       delay *= 2;
       if (delay > max_delay)
@@ -397,9 +381,8 @@ private:
     }
   }
 
+  // set up the connection; conn_mut must be held
   bool connect_once() {
-    std::lock_guard<std::mutex> guard(conn_mut);
-
     if (connected)
       return true;
 
@@ -480,27 +463,25 @@ private:
   }
 
   void add_reply_cb(uint16_t id, ReplyCB cb) {
-    std::lock_guard<std::mutex> guard(reply_callbacks_mut);
+    std::lock_guard<std::mutex> guard(callbacks_mut);
     reply_callbacks.emplace(std::make_pair(id, std::move(cb)));
   }
 
   std::string hostname;
   int port;
 
+  std::mutex send_mut;
   msgpack::sbuffer sbuf;
   uint16_t next_id = 0;
 
   std::mutex conn_mut;
+  std::condition_variable conn_cv;
   int sockfd = -1;
   bool connected = false;
-
-  std::condition_variable disconnect_cv;
   bool should_disconnect = false;
-
-  std::mutex connect_callbacks_mut;
   std::vector<std::function<void(void)>> connect_callbacks;
 
-  std::mutex reply_callbacks_mut;
+  std::mutex callbacks_mut;
   std::map<uint16_t, ReplyCB> reply_callbacks;
   std::map<std::string, StateResultCB> state_callbacks;
 
