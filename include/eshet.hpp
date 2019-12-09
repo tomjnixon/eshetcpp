@@ -47,6 +47,8 @@ using StateResult = std::variant<Known, Unknown, Error>;
 using ResultCB = std::function<void(Result)>;
 using StateResultCB = std::function<void(StateResult)>;
 
+using ActionCB = std::function<Result(msgpack::object_handle args)>;
+
 using AnyResult = std::variant<Success, Known, Unknown, Error>;
 
 using ReplyCB = std::variant<ResultCB, StateResultCB>;
@@ -202,6 +204,35 @@ public:
     send_buf();
   }
 
+  void action_register(const std::string &path, ActionCB action_cb,
+                       ResultCB register_cb) {
+    std::lock_guard<std::mutex> guard(send_mut);
+    start_msg(0x10);
+    uint16_t id = get_id();
+    write16(id);
+    write_string(path);
+    add_reply_cb(id, std::move(register_cb));
+    {
+      std::lock_guard<std::mutex> guard(callbacks_mut);
+      action_callbacks.emplace(std::make_pair(path, std::move(action_cb)));
+    }
+    write_size();
+    send_buf();
+  }
+
+  template <typename... T>
+  void action_call(const std::string &path, ResultCB cb, const T &... value) {
+    std::lock_guard<std::mutex> guard(send_mut);
+    start_msg(0x11);
+    uint16_t id = get_id();
+    write16(id);
+    write_string(path);
+    write_msgpack(std::make_tuple(value...));
+    add_reply_cb(id, cb);
+    write_size();
+    send_buf();
+  }
+
 private:
   void thread_fn() {
     std::vector<uint8_t> msg_buf;
@@ -285,6 +316,33 @@ private:
         throw ProtocolError();
       uint16_t id = read16(&msg[1]);
       reply(id, Unknown());
+    } break;
+    case 0x11: {
+      // {action_call, Id, Path, Msg}
+      if (msg.size() < 4)
+        throw ProtocolError();
+      uint16_t id = read16(&msg[1]);
+      std::string path = read_string(&msg[3], msg.size() - 3);
+      size_t pos = 3 + path.size() + 1;
+      msgpack::object_handle oh =
+          msgpack::unpack((char *)&msg[pos], msg.size() - pos);
+
+      std::unique_lock<std::mutex> callbacks_guard(callbacks_mut);
+      auto it = action_callbacks.find(path);
+      if (it == action_callbacks.end())
+        // missing callback
+        throw ProtocolError();
+
+      Result r = it->second(std::move(oh));
+      callbacks_guard.unlock();
+
+      // reply
+      std::lock_guard<std::mutex> guard(send_mut);
+      start_msg(std::holds_alternative<Success>(r) ? 0x05 : 0x06);
+      write16(id);
+      write_msgpack(std::visit([](const auto &x) { return x.value.get(); }, r));
+      write_size();
+      send_buf();
     } break;
     case 0x44: {
       // {state_changed, Path, unknown}
@@ -484,6 +542,7 @@ private:
   std::mutex callbacks_mut;
   std::map<uint16_t, ReplyCB> reply_callbacks;
   std::map<std::string, StateResultCB> state_callbacks;
+  std::map<std::string, ActionCB> action_callbacks;
 
   std::thread thread;
 };

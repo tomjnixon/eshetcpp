@@ -15,3 +15,4 @@ function(add_eshetcpp_test name)
 endfunction()
 
 add_eshetcpp_test(test_state)
+add_eshetcpp_test(test_action)
