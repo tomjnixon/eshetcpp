@@ -7,9 +7,6 @@ TEST_CASE("make a state and observe") {
   // connect one client which has a state
   ESHETClient client("localhost", 11236);
 
-  std::mutex mut;
-  std::condition_variable cv;
-
   client.on_connect([&]() { client.state_register(NS "/state").get(); });
 
   client.wait_connected().get();
@@ -19,22 +16,15 @@ TEST_CASE("make a state and observe") {
 
   ESHETClient client2("localhost", 11236);
 
-  int observe_known = 0, observe_unknown = 0, observe_error = 0;
-  int state = 0;
+  std::mutex mut;
+  std::condition_variable cv;
+  std::list<StateResult> results;
 
   client2.on_connect([&]() {
     client2.state_observe(NS "/state", [&](StateResult result) {
       {
-        std::cerr << "observe cb" << std::endl;
         std::unique_lock<std::mutex> guard(mut);
-        if (std::holds_alternative<Known>(result)) {
-          observe_known++;
-          std::get<Known>(result).value.get().convert(state);
-        } else if (std::holds_alternative<Unknown>(result)) {
-          observe_unknown++;
-        } else {
-          observe_error++;
-        }
+        results.emplace_back(std::move(result));
       }
       cv.notify_all();
     });
@@ -42,13 +32,10 @@ TEST_CASE("make a state and observe") {
 
   {
     std::unique_lock<std::mutex> guard(mut);
-    cv.wait(guard, [&]() {
-      return observe_known || observe_unknown || observe_error;
-    });
-    REQUIRE(observe_known == 0);
-    REQUIRE(observe_unknown == 1);
-    REQUIRE(observe_error == 0);
-    observe_unknown = 0;
+    cv.wait(guard, [&]() { return !results.empty(); });
+    REQUIRE(results.size() == 1);
+    REQUIRE(std::holds_alternative<Unknown>(results.front()));
+    results.clear();
   }
 
   // publish a change; check that it got to the server and was observed by
@@ -60,14 +47,11 @@ TEST_CASE("make a state and observe") {
 
   {
     std::unique_lock<std::mutex> guard(mut);
-    cv.wait(guard, [&]() {
-      return observe_known || observe_unknown || observe_error;
-    });
-    REQUIRE(observe_known == 1);
-    REQUIRE(observe_unknown == 0);
-    REQUIRE(observe_error == 0);
-    REQUIRE(state == 5);
-    observe_known = 0;
+    cv.wait(guard, [&]() { return !results.empty(); });
+    REQUIRE(results.size() == 1);
+    REQUIRE(std::holds_alternative<Known>(results.front()));
+    REQUIRE(std::get<Known>(results.front()).as<int>() == 5);
+    results.clear();
   }
 
   // publish an unknown; check that it got to the server and was observed by
@@ -77,12 +61,9 @@ TEST_CASE("make a state and observe") {
 
   {
     std::unique_lock<std::mutex> guard(mut);
-    cv.wait(guard, [&]() {
-      return observe_known || observe_unknown || observe_error;
-    });
-    REQUIRE(observe_known == 0);
-    REQUIRE(observe_unknown == 1);
-    REQUIRE(observe_error == 0);
-    observe_unknown = 0;
+    cv.wait(guard, [&]() { return !results.empty(); });
+    REQUIRE(results.size() == 1);
+    REQUIRE(std::holds_alternative<Unknown>(results.front()));
+    results.clear();
   }
 }
