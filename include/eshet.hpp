@@ -7,6 +7,7 @@
 #include <map>
 #include <mutex>
 #include <netdb.h>
+#include <sstream>
 #include <string>
 #include <sys/socket.h>
 #include <thread>
@@ -34,9 +35,24 @@ struct Success : public HasMsgpackObject<Success> {
   static constexpr const char *name = "Success";
 };
 
-struct Error : public HasMsgpackObject<Error> {
+// Error is usable as an exception, so needs to be copyable
+struct Error : public HasMsgpackObject<Error>, public std::exception {
   using HasMsgpackObject<Error>::HasMsgpackObject;
   static constexpr const char *name = "Error";
+
+  Error(const Error &other) : HasMsgpackObject<Error>(other.value.get()) {}
+
+  const char *what() const throw() {
+    if (!error_str.size()) {
+      std::ostringstream stream;
+      stream << "Error(" << value.get() << ")";
+      error_str = stream.str();
+    }
+    return error_str.c_str();
+  }
+
+private:
+  mutable std::string error_str;
 };
 
 using Result = std::variant<Success, Error>;
