@@ -4,6 +4,7 @@
 #include <condition_variable>
 #include <functional>
 #include <iostream>
+#include <list>
 #include <map>
 #include <mutex>
 #include <netdb.h>
@@ -123,15 +124,48 @@ template <typename In, typename Cb> bool convert_variant(In in, Cb cb) {
       std::move(in));
 }
 
+// visitor to resolve a promise with a result; calls set_value for non-Error
+// inputs (which may well get converted to another variant), or set_exception
+// with Errors.
+template <typename PromiseT> struct ResultToPromise {
+  ResultToPromise(std::promise<PromiseT> &p) : p(p) {}
+  std::promise<PromiseT> &p;
+
+  void operator()(Success v) { p.set_value(std::move(v)); }
+  void operator()(Known v) { p.set_value(std::move(v)); }
+  void operator()(Unknown v) { p.set_value(std::move(v)); }
+  void operator()(Error v) {
+    p.set_exception(std::make_exception_ptr(std::move(v)));
+  }
+};
+
+template <typename PT, typename RT, typename CB>
+std::future<PT> wrap_promise(CB wrap_cb) {
+  auto p = std::make_shared<std::promise<PT>>();
+  auto cb = [p](RT r) { std::visit(ResultToPromise(*p), std::move(r)); };
+
+  wrap_cb(std::move(cb));
+
+  return p->get_future();
+}
+
 class ESHETClient {
 public:
   ESHETClient(const std::string &hostname, int port)
       : hostname(hostname), port(port), sbuf(128),
-        thread(&ESHETClient::thread_fn, this) {}
+        read_thread(&ESHETClient::read_thread_fn, this),
+        cb_thread(&ESHETClient::cb_thread_fn, this) {}
 
   ~ESHETClient() {
     disconnect();
-    thread.join();
+    read_thread.join();
+
+    {
+      std::lock_guard<std::mutex> lock(to_call_mut);
+      cb_thread_exit = true;
+    }
+    to_call_cv.notify_all();
+    cb_thread.join();
   }
 
   // register a callback to be called when the connection has been made
@@ -141,7 +175,7 @@ public:
     // do this in the conn_mut mutex to ensure it doesn't get
     // called twice
     if (connected) {
-      cb();
+      call_on_thread(cb);
     }
 
     connect_callbacks.emplace_back(std::move(cb));
@@ -250,13 +284,20 @@ public:
     write16(id);
     write_string(path);
     write_msgpack(std::make_tuple(value...));
-    add_reply_cb(id, cb);
+    add_reply_cb(id, std::move(cb));
     write_size();
     send_buf();
   }
 
+  template <typename... T>
+  std::future<Success> action_call_promise(const std::string &path,
+                                           const T &... value) {
+    return wrap_promise<Success, Result>(
+        [&](auto cb) { action_call(path, std::move(cb), value...); });
+  }
+
 private:
-  void thread_fn() {
+  void read_thread_fn() {
     std::vector<uint8_t> msg_buf;
     while (true) {
       if (!ensure_connected())
@@ -288,6 +329,34 @@ private:
 
       handle_msg(msg_buf);
     }
+  }
+
+  void cb_thread_fn() {
+    while (true) {
+      std::unique_lock<std::mutex> lock(to_call_mut);
+
+      to_call_cv.wait(
+          lock, [&] { return cb_thread_exit || !callbacks_to_call.empty(); });
+
+      if (cb_thread_exit)
+        return;
+      else
+        while (!callbacks_to_call.empty()) {
+          lock.unlock();
+          callbacks_to_call.front()();
+          lock.lock();
+
+          callbacks_to_call.pop_front();
+        }
+    }
+  }
+
+  void call_on_thread(std::function<void(void)> fn) {
+    {
+      std::lock_guard<std::mutex> lock(to_call_mut);
+      callbacks_to_call.emplace_back(std::move(fn));
+    }
+    to_call_cv.notify_all();
   }
 
   uint16_t read16(const uint8_t *data) {
@@ -447,7 +516,7 @@ private:
       std::unique_lock<std::mutex> guard(conn_mut);
       if (connect_once()) {
         for (auto &cb : connect_callbacks) {
-          cb();
+          call_on_thread(cb);
         }
         return true;
       }
@@ -566,5 +635,11 @@ private:
   std::map<std::string, StateResultCB> state_callbacks;
   std::map<std::string, ActionCB> action_callbacks;
 
-  std::thread thread;
+  std::thread read_thread;
+
+  std::mutex to_call_mut;
+  std::condition_variable to_call_cv;
+  std::list<std::function<void(void)>> callbacks_to_call;
+  bool cb_thread_exit = false;
+  std::thread cb_thread;
 };
