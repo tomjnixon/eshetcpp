@@ -21,6 +21,12 @@ template <typename Base> struct HasMsgpackObject {
   template <typename T> HasMsgpackObject(T t) {
     value.set(msgpack::object(std::move(t)));
   }
+
+  template <typename T> T as() {
+    T v;
+    value.get().convert(v);
+    return v;
+  }
 };
 
 struct Success : public HasMsgpackObject<Success> {
