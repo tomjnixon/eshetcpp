@@ -589,7 +589,7 @@ private:
       send_buf();
     } break;
     case 0x44: {
-      // {state_changed, Path, unknown}
+      // {state_changed, Path, {known, State}}
       std::string path = read_string(&msg[1], msg.size() - 1);
       size_t pos = 1 + path.size() + 1;
       msgpack::object_handle oh =
@@ -603,7 +603,7 @@ private:
       it->second(Known(std::move(oh)));
     } break;
     case 0x45: {
-      // {state_changed, Path, {known, State}}
+      // {state_changed, Path, unknown}
       std::string path = read_string(&msg[1], msg.size() - 1);
       if (path.size() + 2 != msg.size())
         // space at the end
