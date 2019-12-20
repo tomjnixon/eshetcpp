@@ -3,69 +3,28 @@
 
 #define NS "/eshetcpp_test_action"
 
-TEST_CASE("make an action and call it") {
+TEST_CASE("make and call") {
   ESHETClient client("localhost", 11236);
-
-  int register_success = 0, register_error = 0;
-  std::mutex mut;
-  std::condition_variable cv;
-
-  client.on_connect([&]() {
-    std::cerr << "on connect" << std::endl;
-    client.action_register(
-        NS "/action",
-        [&](msgpack::object_handle args) {
-          std::tuple<int> argss;
-          std::cout << args.get() << std::endl;
-          args.get().convert(argss);
-          return Success(std::get<0>(argss) + 1);
-        },
-        [&](Result r) {
-          {
-            std::unique_lock<std::mutex> guard(mut);
-            if (std::holds_alternative<Success>(r))
-              register_success++;
-            else
-              register_error++;
-          }
-          cv.notify_all();
-        });
+  client.on_connect([&] {
+    client
+        .action_register(NS "/action",
+                         [&](msgpack::object_handle args) {
+                           std::tuple<int> argss;
+                           args.get().convert(argss);
+                           return Success(std::get<0>(argss) + 1);
+                         })
+        .get();
   });
 
-  {
-    std::unique_lock<std::mutex> guard(mut);
-    cv.wait(guard, [&]() { return register_success || register_error; });
-    REQUIRE(register_success == 1);
-    REQUIRE(register_error == 0);
-  }
+  client.wait_connected().get();
 
   ESHETClient client2("localhost", 11236);
 
-  int action_success = 0, action_error = 0, action_result = 0;
+  client2.wait_connected().get();
 
-  client2.on_connect([&]() {
-    std::cerr << "on connect 2" << std::endl;
-    client2.action_call(
-        NS "/action",
-        [&](Result r) {
-          {
-            std::unique_lock<std::mutex> guard(mut);
-            if (std::holds_alternative<Success>(r)) {
-              action_success++;
-              std::get<Success>(r).value.get().convert(action_result);
-            } else
-              register_error++;
-          }
-          cv.notify_all();
-        },
-        5);
-  });
+  auto res = client2.action_call_promise(NS "/action", 5).get();
+  REQUIRE(res.as<int>() == 6);
 
-  {
-    std::unique_lock<std::mutex> guard(mut);
-    cv.wait(guard, [&]() { return action_success || action_error; });
-    REQUIRE(action_success == 1);
-    REQUIRE(action_error == 0);
-    REQUIRE(action_result == 6);
-  }
+  auto res2 = client2.action_call_promise(NS "/actionz", 5);
+  REQUIRE_THROWS_AS(res2.get().as<int>(), Error);
 }

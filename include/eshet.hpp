@@ -3,6 +3,7 @@
 #include "msgpack.hpp"
 #include <condition_variable>
 #include <functional>
+#include <future>
 #include <iostream>
 #include <list>
 #include <map>
@@ -181,6 +182,20 @@ public:
     connect_callbacks.emplace_back(std::move(cb));
   }
 
+  std::future<void> wait_connected() {
+    auto p = std::make_shared<std::promise<void>>();
+    auto cb = [p, called = false]() mutable {
+      if (!called) {
+        p->set_value();
+        called = true;
+      }
+    };
+
+    on_connect(std::move(cb));
+
+    return p->get_future();
+  }
+
   // disconnect and wait for cleanup to finish
   void disconnect() {
     std::unique_lock<std::mutex> cv_guard(conn_mut);
@@ -214,6 +229,11 @@ public:
     send_buf();
   }
 
+  std::future<Success> state_register(const std::string &path) {
+    return wrap_promise<Success, Result>(
+        [&](auto cb) { state_register(path, std::move(cb)); });
+  }
+
   // notify observers that a registered state has changed
   template <typename T>
   void state_changed(const std::string &path, const T &value,
@@ -229,6 +249,12 @@ public:
     send_buf();
   }
 
+  template <typename T>
+  std::future<Success> state_changed(const std::string &path, const T &value) {
+    return wrap_promise<Success, Result>(
+        [&](auto cb) { state_changed(path, value, std::move(cb)); });
+  }
+
   // notify observers that a registered state is unknown
   void state_unknown(const std::string &path, std::function<void(Result)> cb) {
     std::lock_guard<std::mutex> guard(send_mut);
@@ -239,6 +265,11 @@ public:
     add_reply_cb(id, std::move(cb));
     write_size();
     send_buf();
+  }
+
+  std::future<Success> state_unknown(const std::string &path) {
+    return wrap_promise<Success, Result>(
+        [&](auto cb) { state_unknown(path, std::move(cb)); });
   }
 
   // observe a state. cb will be called with the state once during
@@ -274,6 +305,13 @@ public:
     }
     write_size();
     send_buf();
+  }
+
+  std::future<Success> action_register(const std::string &path,
+                                       ActionCB action_cb) {
+    return wrap_promise<Success, Result>([&](auto cb) {
+      action_register(path, std::move(action_cb), std::move(cb));
+    });
   }
 
   template <typename... T>
