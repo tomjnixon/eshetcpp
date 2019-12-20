@@ -20,6 +20,7 @@
 template <typename Base> struct HasMsgpackObject {
   msgpack::object_handle value;
   HasMsgpackObject(msgpack::object_handle value) : value(std::move(value)) {}
+  HasMsgpackObject() {}
 
   template <typename T> HasMsgpackObject(T t) {
     value.set(msgpack::object(std::move(t)));
