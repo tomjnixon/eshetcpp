@@ -74,6 +74,9 @@ using StateResultCB = std::function<void(StateResult)>;
 
 using ActionCB = std::function<Result(msgpack::object_handle args)>;
 
+using GetCB = std::function<Result(void)>;
+using SetCB = std::function<Result(msgpack::object_handle args)>;
+
 using AnyResult = std::variant<Success, Known, Unknown, Error>;
 
 using ReplyCB = std::variant<ResultCB, StateResultCB>;
@@ -335,6 +338,65 @@ public:
         [&](auto cb) { action_call(path, std::move(cb), value...); });
   }
 
+  void prop_register(const std::string &path, GetCB get_cb, SetCB set_cb,
+                     ResultCB register_cb) {
+    std::lock_guard<std::mutex> guard(send_mut);
+    start_msg(0x20);
+    uint16_t id = get_id();
+    write16(id);
+    write_string(path);
+    add_reply_cb(id, std::move(register_cb));
+    {
+      std::lock_guard<std::mutex> guard(callbacks_mut);
+      prop_callbacks.emplace(std::make_pair(
+          path, std::make_pair(std::move(get_cb), std::move(set_cb))));
+    }
+    write_size();
+    send_buf();
+  }
+
+  std::future<Success> prop_register(const std::string &path, GetCB get_cb,
+                                     SetCB set_cb) {
+    return wrap_promise<Success, Result>([&](auto cb) {
+      prop_register(path, std::move(get_cb), std::move(set_cb), std::move(cb));
+    });
+  }
+
+  void get(const std::string &path, ResultCB cb) {
+    std::lock_guard<std::mutex> guard(send_mut);
+    start_msg(0x23);
+    uint16_t id = get_id();
+    write16(id);
+    write_string(path);
+    add_reply_cb(id, std::move(cb));
+    write_size();
+    send_buf();
+  }
+
+  std::future<Success> get(const std::string &path) {
+    return wrap_promise<Success, Result>(
+        [&](auto cb) { get(path, std::move(cb)); });
+  }
+
+  template <typename T>
+  void set(const std::string &path, const T &value, ResultCB cb) {
+    std::lock_guard<std::mutex> guard(send_mut);
+    start_msg(0x24);
+    uint16_t id = get_id();
+    write16(id);
+    write_string(path);
+    write_msgpack(value);
+    add_reply_cb(id, std::move(cb));
+    write_size();
+    send_buf();
+  }
+
+  template <typename T>
+  std::future<Success> set(const std::string &path, const T &value) {
+    return wrap_promise<Success, Result>(
+        [&](auto cb) { set(path, value, std::move(cb)); });
+  }
+
 private:
   void read_thread_fn() {
     std::vector<uint8_t> msg_buf;
@@ -464,6 +526,58 @@ private:
         throw ProtocolError();
 
       Result r = it->second(std::move(oh));
+      callbacks_guard.unlock();
+
+      // reply
+      std::lock_guard<std::mutex> guard(send_mut);
+      start_msg(std::holds_alternative<Success>(r) ? 0x05 : 0x06);
+      write16(id);
+      write_msgpack(std::visit([](const auto &x) { return x.value.get(); }, r));
+      write_size();
+      send_buf();
+    } break;
+    case 0x21: {
+      // {prop_get, Id, Path}
+      uint16_t id = read16(&msg[1]);
+      std::string path = read_string(&msg[3], msg.size() - 3);
+      if (3 + path.size() + 1 != msg.size())
+        // space at the end
+        throw ProtocolError();
+
+      std::unique_lock<std::mutex> callbacks_guard(callbacks_mut);
+      auto it = prop_callbacks.find(path);
+      if (it == prop_callbacks.end())
+        // missing callback
+        throw ProtocolError();
+
+      Result r = it->second.first();
+      callbacks_guard.unlock();
+
+      // reply
+      std::lock_guard<std::mutex> guard(send_mut);
+      start_msg(std::holds_alternative<Success>(r) ? 0x05 : 0x06);
+      write16(id);
+      write_msgpack(std::visit([](const auto &x) { return x.value.get(); }, r));
+      write_size();
+      send_buf();
+    } break;
+    case 0x22: {
+      // {prop_set, Id, Path, Value}
+      if (msg.size() < 4)
+        throw ProtocolError();
+      uint16_t id = read16(&msg[1]);
+      std::string path = read_string(&msg[3], msg.size() - 3);
+      size_t pos = 3 + path.size() + 1;
+      msgpack::object_handle oh =
+          msgpack::unpack((char *)&msg[pos], msg.size() - pos);
+
+      std::unique_lock<std::mutex> callbacks_guard(callbacks_mut);
+      auto it = prop_callbacks.find(path);
+      if (it == prop_callbacks.end())
+        // missing callback
+        throw ProtocolError();
+
+      Result r = it->second.second(std::move(oh));
       callbacks_guard.unlock();
 
       // reply
@@ -674,6 +788,7 @@ private:
   std::map<uint16_t, ReplyCB> reply_callbacks;
   std::map<std::string, StateResultCB> state_callbacks;
   std::map<std::string, ActionCB> action_callbacks;
+  std::map<std::string, std::pair<GetCB, SetCB>> prop_callbacks;
 
   std::thread read_thread;
 
