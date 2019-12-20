@@ -645,6 +645,7 @@ private:
   }
 
   void send_buf() {
+    std::lock_guard<std::mutex> lock(conn_mut);
     if (send(sockfd, sbuf.data(), sbuf.size(), 0) < 0)
       throw Disconnected{};
   }
