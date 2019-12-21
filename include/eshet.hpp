@@ -110,6 +110,45 @@ struct ProtocolError : public std::exception {
   const char *what() const throw() { return "ProtocolError"; }
 };
 
+std::pair<uint16_t, size_t> read16(const uint8_t *data, size_t size) {
+  if (size < 2)
+    throw ProtocolError();
+  return {((uint16_t)data[0] << 8) + data[1], 2};
+}
+
+std::pair<std::string, size_t> read_string(const uint8_t *data, size_t size) {
+  size_t length;
+  for (length = 0; length < size; length++)
+    if (data[length] == 0)
+      break;
+
+  if (length == size)
+    throw ProtocolError();
+
+  return {std::string((const char *)data, length), length + 1};
+}
+
+std::pair<msgpack::object_handle, size_t> read_msgpack(const uint8_t *data,
+                                                         size_t size) {
+  if (size < 1)
+    throw ProtocolError();
+  return {msgpack::unpack((char *)data, size), size};
+}
+
+std::tuple<> parse(const uint8_t *data, size_t size) {
+  if (size > 0)
+    throw ProtocolError();
+  return std::make_tuple();
+}
+
+template <typename CB, typename... CBs>
+auto parse(const uint8_t *data, size_t size, CB cb, CBs... cbs) {
+  auto ret = cb(data, size);
+
+  return std::tuple_cat(std::make_tuple(std::move(ret.first)),
+                        parse(data + ret.second, size - ret.second, cbs...));
+}
+
 namespace detail {
 template <typename In, typename Cb>
 auto do_convert_variant(In in, Cb cb) -> decltype(cb(std::move(in)), bool()) {
@@ -418,7 +457,7 @@ private:
         continue;
       }
 
-      uint16_t size = read16(header_buf + 1);
+      uint16_t size = read16(header_buf + 1, 2).first;
 
       msg_buf.resize(size);
 
@@ -460,22 +499,6 @@ private:
     to_call_cv.notify_all();
   }
 
-  uint16_t read16(const uint8_t *data) {
-    return ((uint16_t)data[0] << 8) + data[1];
-  }
-
-  std::string read_string(const uint8_t *data, size_t size) {
-    size_t length;
-    for (length = 0; length < size; length++)
-      if (data[length] == 0)
-        break;
-
-    if (length == size)
-      throw ProtocolError();
-
-    return std::string((const char *)data, length);
-  }
-
   void handle_msg(const std::vector<uint8_t> &msg) {
     if (msg.size() < 1)
       throw ProtocolError();
@@ -483,41 +506,41 @@ private:
     switch (msg[0]) {
     case 0x05: {
       // {reply, Id, {ok, Msg}}
-      if (msg.size() < 3)
-        throw ProtocolError();
-      uint16_t id = read16(&msg[1]);
-      reply(id, Success(msgpack::unpack((char *)&msg[3], msg.size() - 3)));
+      uint16_t id;
+      msgpack::object_handle oh;
+      std::tie(id, oh) =
+          parse(&msg[1], msg.size() - 1, read16, read_msgpack);
+      reply(id, Success(std::move(oh)));
     } break;
     case 0x06: {
       // {reply, Id, {error, Msg}}
-      if (msg.size() < 3)
-        throw ProtocolError();
-      uint16_t id = read16(&msg[1]);
-      reply(id, Error(msgpack::unpack((char *)&msg[3], msg.size() - 3)));
+      uint16_t id;
+      msgpack::object_handle oh;
+      std::tie(id, oh) =
+          parse(&msg[1], msg.size() - 1, read16, read_msgpack);
+      reply(id, Error(std::move(oh)));
     } break;
     case 0x07: {
       // {reply_state, Id, {known, Msg}}
-      if (msg.size() < 3)
-        throw ProtocolError();
-      uint16_t id = read16(&msg[1]);
-      reply(id, Known(msgpack::unpack((char *)&msg[3], msg.size() - 3)));
+      uint16_t id;
+      msgpack::object_handle oh;
+      std::tie(id, oh) =
+          parse(&msg[1], msg.size() - 1, read16, read_msgpack);
+      reply(id, Known(std::move(oh)));
     } break;
     case 0x08: {
       // {reply_state, Id, unknown}
-      if (msg.size() != 3)
-        throw ProtocolError();
-      uint16_t id = read16(&msg[1]);
+      uint16_t id;
+      std::tie(id) = parse(&msg[1], msg.size() - 1, read16);
       reply(id, Unknown());
     } break;
     case 0x11: {
       // {action_call, Id, Path, Msg}
-      if (msg.size() < 4)
-        throw ProtocolError();
-      uint16_t id = read16(&msg[1]);
-      std::string path = read_string(&msg[3], msg.size() - 3);
-      size_t pos = 3 + path.size() + 1;
-      msgpack::object_handle oh =
-          msgpack::unpack((char *)&msg[pos], msg.size() - pos);
+      uint16_t id;
+      std::string path;
+      msgpack::object_handle oh;
+      std::tie(id, path, oh) = parse(&msg[1], msg.size() - 1, read16,
+                                     read_string, read_msgpack);
 
       std::unique_lock<std::mutex> callbacks_guard(callbacks_mut);
       auto it = action_callbacks.find(path);
@@ -538,11 +561,10 @@ private:
     } break;
     case 0x21: {
       // {prop_get, Id, Path}
-      uint16_t id = read16(&msg[1]);
-      std::string path = read_string(&msg[3], msg.size() - 3);
-      if (3 + path.size() + 1 != msg.size())
-        // space at the end
-        throw ProtocolError();
+      uint16_t id;
+      std::string path;
+      std::tie(id, path) =
+          parse(&msg[1], msg.size() - 1, read16, read_string);
 
       std::unique_lock<std::mutex> callbacks_guard(callbacks_mut);
       auto it = prop_callbacks.find(path);
@@ -563,13 +585,11 @@ private:
     } break;
     case 0x22: {
       // {prop_set, Id, Path, Value}
-      if (msg.size() < 4)
-        throw ProtocolError();
-      uint16_t id = read16(&msg[1]);
-      std::string path = read_string(&msg[3], msg.size() - 3);
-      size_t pos = 3 + path.size() + 1;
-      msgpack::object_handle oh =
-          msgpack::unpack((char *)&msg[pos], msg.size() - pos);
+      uint16_t id;
+      std::string path;
+      msgpack::object_handle oh;
+      std::tie(id, path, oh) = parse(&msg[1], msg.size() - 1, read16,
+                                     read_string, read_msgpack);
 
       std::unique_lock<std::mutex> callbacks_guard(callbacks_mut);
       auto it = prop_callbacks.find(path);
@@ -590,10 +610,10 @@ private:
     } break;
     case 0x44: {
       // {state_changed, Path, {known, State}}
-      std::string path = read_string(&msg[1], msg.size() - 1);
-      size_t pos = 1 + path.size() + 1;
-      msgpack::object_handle oh =
-          msgpack::unpack((char *)&msg[pos], msg.size() - pos);
+      std::string path;
+      msgpack::object_handle oh;
+      std::tie(path, oh) =
+          parse(&msg[1], msg.size() - 1, read_string, read_msgpack);
 
       std::lock_guard<std::mutex> guard(callbacks_mut);
       auto it = state_callbacks.find(path);
@@ -604,10 +624,8 @@ private:
     } break;
     case 0x45: {
       // {state_changed, Path, unknown}
-      std::string path = read_string(&msg[1], msg.size() - 1);
-      if (path.size() + 2 != msg.size())
-        // space at the end
-        throw ProtocolError();
+      std::string path;
+      std::tie(path) = parse(&msg[1], msg.size() - 1, read_string);
 
       std::lock_guard<std::mutex> guard(callbacks_mut);
       auto it = state_callbacks.find(path);
