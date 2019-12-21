@@ -1,4 +1,5 @@
 #pragma once
+#include "eshet/callback_thread.hpp"
 #include "eshet/data.hpp"
 #include "eshet/parse.hpp"
 #include "eshet/util.hpp"
@@ -6,7 +7,6 @@
 #include <functional>
 #include <future>
 #include <iostream>
-#include <list>
 #include <map>
 #include <mutex>
 #include <netdb.h>
@@ -24,19 +24,11 @@ class ESHETClient {
 public:
   ESHETClient(const std::string &hostname, int port)
       : hostname(hostname), port(port), sbuf(128),
-        read_thread(&ESHETClient::read_thread_fn, this),
-        cb_thread(&ESHETClient::cb_thread_fn, this) {}
+        read_thread(&ESHETClient::read_thread_fn, this) {}
 
   ~ESHETClient() {
     disconnect();
     read_thread.join();
-
-    {
-      std::lock_guard<std::mutex> lock(to_call_mut);
-      cb_thread_exit = true;
-    }
-    to_call_cv.notify_all();
-    cb_thread.join();
   }
 
   // register a callback to be called when the connection has been made
@@ -46,7 +38,7 @@ public:
     // do this in the conn_mut mutex to ensure it doesn't get
     // called twice
     if (connected) {
-      call_on_thread(cb);
+      cb_thread.call_on_thread(cb);
     }
 
     connect_callbacks.emplace_back(std::move(cb));
@@ -298,34 +290,6 @@ private:
     }
   }
 
-  void cb_thread_fn() {
-    while (true) {
-      std::unique_lock<std::mutex> lock(to_call_mut);
-
-      to_call_cv.wait(
-          lock, [&] { return cb_thread_exit || !callbacks_to_call.empty(); });
-
-      if (cb_thread_exit)
-        return;
-      else
-        while (!callbacks_to_call.empty()) {
-          lock.unlock();
-          callbacks_to_call.front()();
-          lock.lock();
-
-          callbacks_to_call.pop_front();
-        }
-    }
-  }
-
-  void call_on_thread(std::function<void(void)> fn) {
-    {
-      std::lock_guard<std::mutex> lock(to_call_mut);
-      callbacks_to_call.emplace_back(std::move(fn));
-    }
-    to_call_cv.notify_all();
-  }
-
   void handle_msg(const std::vector<uint8_t> &msg) {
     using namespace detail;
 
@@ -514,7 +478,7 @@ private:
       std::unique_lock<std::mutex> guard(conn_mut);
       if (connect_once()) {
         for (auto &cb : connect_callbacks) {
-          call_on_thread(cb);
+          cb_thread.call_on_thread(cb);
         }
         return true;
       }
@@ -637,11 +601,7 @@ private:
 
   std::thread read_thread;
 
-  std::mutex to_call_mut;
-  std::condition_variable to_call_cv;
-  std::list<std::function<void(void)>> callbacks_to_call;
-  bool cb_thread_exit = false;
-  std::thread cb_thread;
+  CallbackThread cb_thread;
 };
 
 } // namespace eshet
