@@ -11,14 +11,12 @@ TEST_CASE("make, get and set") {
 
   client.on_connect([&] {
     client
-        .prop_register(NS "/prop",
-                         [&]() {
-                           return Success(prop_value);
-                         },
-                         [&](msgpack::object_handle value_pack) {
-                           value_pack.get().convert(prop_value);
-                           return Success();
-                         })
+        .prop_register(
+            NS "/prop", [&]() { return Success(prop_value); },
+            [&](msgpack::object_handle value_pack) {
+              value_pack.get().convert(prop_value);
+              return Success();
+            })
         .get();
   });
 

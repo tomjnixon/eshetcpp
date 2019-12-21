@@ -337,24 +337,21 @@ private:
       // {reply, Id, {ok, Msg}}
       uint16_t id;
       msgpack::object_handle oh;
-      std::tie(id, oh) =
-          parse(&msg[1], msg.size() - 1, read16, read_msgpack);
+      std::tie(id, oh) = parse(&msg[1], msg.size() - 1, read16, read_msgpack);
       reply(id, Success(std::move(oh)));
     } break;
     case 0x06: {
       // {reply, Id, {error, Msg}}
       uint16_t id;
       msgpack::object_handle oh;
-      std::tie(id, oh) =
-          parse(&msg[1], msg.size() - 1, read16, read_msgpack);
+      std::tie(id, oh) = parse(&msg[1], msg.size() - 1, read16, read_msgpack);
       reply(id, Error(std::move(oh)));
     } break;
     case 0x07: {
       // {reply_state, Id, {known, Msg}}
       uint16_t id;
       msgpack::object_handle oh;
-      std::tie(id, oh) =
-          parse(&msg[1], msg.size() - 1, read16, read_msgpack);
+      std::tie(id, oh) = parse(&msg[1], msg.size() - 1, read16, read_msgpack);
       reply(id, Known(std::move(oh)));
     } break;
     case 0x08: {
@@ -368,8 +365,8 @@ private:
       uint16_t id;
       std::string path;
       msgpack::object_handle oh;
-      std::tie(id, path, oh) = parse(&msg[1], msg.size() - 1, read16,
-                                     read_string, read_msgpack);
+      std::tie(id, path, oh) =
+          parse(&msg[1], msg.size() - 1, read16, read_string, read_msgpack);
 
       std::unique_lock<std::mutex> callbacks_guard(callbacks_mut);
       auto it = action_callbacks.find(path);
@@ -392,8 +389,7 @@ private:
       // {prop_get, Id, Path}
       uint16_t id;
       std::string path;
-      std::tie(id, path) =
-          parse(&msg[1], msg.size() - 1, read16, read_string);
+      std::tie(id, path) = parse(&msg[1], msg.size() - 1, read16, read_string);
 
       std::unique_lock<std::mutex> callbacks_guard(callbacks_mut);
       auto it = prop_callbacks.find(path);
@@ -417,8 +413,8 @@ private:
       uint16_t id;
       std::string path;
       msgpack::object_handle oh;
-      std::tie(id, path, oh) = parse(&msg[1], msg.size() - 1, read16,
-                                     read_string, read_msgpack);
+      std::tie(id, path, oh) =
+          parse(&msg[1], msg.size() - 1, read16, read_string, read_msgpack);
 
       std::unique_lock<std::mutex> callbacks_guard(callbacks_mut);
       auto it = prop_callbacks.find(path);
