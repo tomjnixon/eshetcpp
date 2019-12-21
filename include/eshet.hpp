@@ -1,6 +1,7 @@
 #pragma once
-#define MSGPACK_VREFBUFFER_HPP
-#include "msgpack.hpp"
+#include "eshet/data.hpp"
+#include "eshet/parse.hpp"
+#include "eshet/util.hpp"
 #include <condition_variable>
 #include <functional>
 #include <future>
@@ -17,181 +18,7 @@
 #include <utility>
 #include <variant>
 
-template <typename Base> struct HasMsgpackObject {
-  msgpack::object_handle value;
-  HasMsgpackObject(msgpack::object_handle value) : value(std::move(value)) {}
-  HasMsgpackObject() {}
-
-  template <typename T> HasMsgpackObject(T t) {
-    value.set(msgpack::object(std::move(t)));
-  }
-
-  template <typename T> T as() {
-    T v;
-    value.get().convert(v);
-    return v;
-  }
-};
-
-struct Success : public HasMsgpackObject<Success> {
-  using HasMsgpackObject<Success>::HasMsgpackObject;
-  static constexpr const char *name = "Success";
-};
-
-// Error is usable as an exception, so needs to be copyable
-struct Error : public HasMsgpackObject<Error>, public std::exception {
-  using HasMsgpackObject<Error>::HasMsgpackObject;
-  static constexpr const char *name = "Error";
-
-  Error(const Error &other) : HasMsgpackObject<Error>(other.value.get()) {}
-
-  const char *what() const throw() {
-    if (!error_str.size()) {
-      std::ostringstream stream;
-      stream << "Error(" << value.get() << ")";
-      error_str = stream.str();
-    }
-    return error_str.c_str();
-  }
-
-private:
-  mutable std::string error_str;
-};
-
-using Result = std::variant<Success, Error>;
-
-struct Known : public HasMsgpackObject<Known> {
-  using HasMsgpackObject<Known>::HasMsgpackObject;
-  static constexpr const char *name = "Known";
-};
-
-struct Unknown {};
-
-using StateResult = std::variant<Known, Unknown, Error>;
-
-using ResultCB = std::function<void(Result)>;
-using StateResultCB = std::function<void(StateResult)>;
-
-using ActionCB = std::function<Result(msgpack::object_handle args)>;
-
-using GetCB = std::function<Result(void)>;
-using SetCB = std::function<Result(msgpack::object_handle args)>;
-
-using AnyResult = std::variant<Success, Known, Unknown, Error>;
-
-using ReplyCB = std::variant<ResultCB, StateResultCB>;
-
-// make these printable
-
-template <typename Base>
-std::ostream &operator<<(std::ostream &stream,
-                         const HasMsgpackObject<Base> &value) {
-  return stream << Base::name << "(" << value.value.get() << ")";
-}
-
-std::ostream &operator<<(std::ostream &stream, const Unknown &unknown) {
-  return stream << "unknown";
-}
-
-template <typename T,
-          typename = std::enable_if_t<std::is_same<T, Result>::value ||
-                                      std::is_same<T, StateResult>::value ||
-                                      std::is_same<T, AnyResult>::value>>
-std::ostream &operator<<(std::ostream &stream, const T &result) {
-  std::visit([&](const auto &v) { stream << v; }, result);
-  return stream;
-}
-
-struct Disconnected : public std::exception {
-  const char *what() const throw() { return "Disconnected"; }
-};
-
-struct ProtocolError : public std::exception {
-  const char *what() const throw() { return "ProtocolError"; }
-};
-
-std::pair<uint16_t, size_t> read16(const uint8_t *data, size_t size) {
-  if (size < 2)
-    throw ProtocolError();
-  return {((uint16_t)data[0] << 8) + data[1], 2};
-}
-
-std::pair<std::string, size_t> read_string(const uint8_t *data, size_t size) {
-  size_t length;
-  for (length = 0; length < size; length++)
-    if (data[length] == 0)
-      break;
-
-  if (length == size)
-    throw ProtocolError();
-
-  return {std::string((const char *)data, length), length + 1};
-}
-
-std::pair<msgpack::object_handle, size_t> read_msgpack(const uint8_t *data,
-                                                         size_t size) {
-  if (size < 1)
-    throw ProtocolError();
-  return {msgpack::unpack((char *)data, size), size};
-}
-
-std::tuple<> parse(const uint8_t *data, size_t size) {
-  if (size > 0)
-    throw ProtocolError();
-  return std::make_tuple();
-}
-
-template <typename CB, typename... CBs>
-auto parse(const uint8_t *data, size_t size, CB cb, CBs... cbs) {
-  auto ret = cb(data, size);
-
-  return std::tuple_cat(std::make_tuple(std::move(ret.first)),
-                        parse(data + ret.second, size - ret.second, cbs...));
-}
-
-namespace detail {
-template <typename In, typename Cb>
-auto do_convert_variant(In in, Cb cb) -> decltype(cb(std::move(in)), bool()) {
-  cb(std::move(in));
-  return true;
-}
-
-bool do_convert_variant(...) { return false; }
-} // namespace detail
-
-// Helper to convert between variants holding the same type.
-// If `in` holds something that `cb` can be called with, it will be, and the
-// return value will be true; otherwise the return value will be false.
-template <typename In, typename Cb> bool convert_variant(In in, Cb cb) {
-  return std::visit(
-      [&](auto x) { return detail::do_convert_variant(std::move(x), cb); },
-      std::move(in));
-}
-
-// visitor to resolve a promise with a result; calls set_value for non-Error
-// inputs (which may well get converted to another variant), or set_exception
-// with Errors.
-template <typename PromiseT> struct ResultToPromise {
-  ResultToPromise(std::promise<PromiseT> &p) : p(p) {}
-  std::promise<PromiseT> &p;
-
-  void operator()(Success v) { p.set_value(std::move(v)); }
-  void operator()(Known v) { p.set_value(std::move(v)); }
-  void operator()(Unknown v) { p.set_value(std::move(v)); }
-  void operator()(Error v) {
-    p.set_exception(std::make_exception_ptr(std::move(v)));
-  }
-};
-
-template <typename PT, typename RT, typename CB>
-std::future<PT> wrap_promise(CB wrap_cb) {
-  auto p = std::make_shared<std::promise<PT>>();
-  auto cb = [p](RT r) { std::visit(ResultToPromise(*p), std::move(r)); };
-
-  wrap_cb(std::move(cb));
-
-  return p->get_future();
-}
+namespace eshet {
 
 class ESHETClient {
 public:
@@ -273,7 +100,7 @@ public:
   }
 
   std::future<Success> state_register(const std::string &path) {
-    return wrap_promise<Success, Result>(
+    return detail::wrap_promise<Success, Result>(
         [&](auto cb) { state_register(path, std::move(cb)); });
   }
 
@@ -294,7 +121,7 @@ public:
 
   template <typename T>
   std::future<Success> state_changed(const std::string &path, const T &value) {
-    return wrap_promise<Success, Result>(
+    return detail::wrap_promise<Success, Result>(
         [&](auto cb) { state_changed(path, value, std::move(cb)); });
   }
 
@@ -311,7 +138,7 @@ public:
   }
 
   std::future<Success> state_unknown(const std::string &path) {
-    return wrap_promise<Success, Result>(
+    return detail::wrap_promise<Success, Result>(
         [&](auto cb) { state_unknown(path, std::move(cb)); });
   }
 
@@ -352,7 +179,7 @@ public:
 
   std::future<Success> action_register(const std::string &path,
                                        ActionCB action_cb) {
-    return wrap_promise<Success, Result>([&](auto cb) {
+    return detail::wrap_promise<Success, Result>([&](auto cb) {
       action_register(path, std::move(action_cb), std::move(cb));
     });
   }
@@ -373,7 +200,7 @@ public:
   template <typename... T>
   std::future<Success> action_call_promise(const std::string &path,
                                            const T &... value) {
-    return wrap_promise<Success, Result>(
+    return detail::wrap_promise<Success, Result>(
         [&](auto cb) { action_call(path, std::move(cb), value...); });
   }
 
@@ -396,7 +223,7 @@ public:
 
   std::future<Success> prop_register(const std::string &path, GetCB get_cb,
                                      SetCB set_cb) {
-    return wrap_promise<Success, Result>([&](auto cb) {
+    return detail::wrap_promise<Success, Result>([&](auto cb) {
       prop_register(path, std::move(get_cb), std::move(set_cb), std::move(cb));
     });
   }
@@ -413,7 +240,7 @@ public:
   }
 
   std::future<Success> get(const std::string &path) {
-    return wrap_promise<Success, Result>(
+    return detail::wrap_promise<Success, Result>(
         [&](auto cb) { get(path, std::move(cb)); });
   }
 
@@ -432,7 +259,7 @@ public:
 
   template <typename T>
   std::future<Success> set(const std::string &path, const T &value) {
-    return wrap_promise<Success, Result>(
+    return detail::wrap_promise<Success, Result>(
         [&](auto cb) { set(path, value, std::move(cb)); });
   }
 
@@ -457,7 +284,7 @@ private:
         continue;
       }
 
-      uint16_t size = read16(header_buf + 1, 2).first;
+      uint16_t size = detail::read16(header_buf + 1, 2).first;
 
       msg_buf.resize(size);
 
@@ -500,6 +327,8 @@ private:
   }
 
   void handle_msg(const std::vector<uint8_t> &msg) {
+    using namespace detail;
+
     if (msg.size() < 1)
       throw ProtocolError();
 
@@ -651,7 +480,9 @@ private:
     guard.unlock();
 
     if (!std::visit(
-            [&](auto &cb) { return convert_variant(std::move(result), cb); },
+            [&](auto &cb) {
+              return detail::convert_variant(std::move(result), cb);
+            },
             nh.mapped()))
       // wrong type of return
       throw ProtocolError();
@@ -816,3 +647,5 @@ private:
   bool cb_thread_exit = false;
   std::thread cb_thread;
 };
+
+} // namespace eshet

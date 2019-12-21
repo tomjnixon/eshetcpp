@@ -1,6 +1,7 @@
 #include "catch2/catch.hpp"
 #include "eshet.hpp"
 
+using namespace eshet;
 #define NS "/eshetcpp_test_action"
 
 TEST_CASE("make and call") {
