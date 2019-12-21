@@ -302,27 +302,27 @@ private:
       uint16_t id;
       msgpack::object_handle oh;
       std::tie(id, oh) = parse(&msg[1], msg.size() - 1, read16, read_msgpack);
-      reply(id, Success(std::move(oh)));
+      handle_reply(id, Success(std::move(oh)));
     } break;
     case 0x06: {
       // {reply, Id, {error, Msg}}
       uint16_t id;
       msgpack::object_handle oh;
       std::tie(id, oh) = parse(&msg[1], msg.size() - 1, read16, read_msgpack);
-      reply(id, Error(std::move(oh)));
+      handle_reply(id, Error(std::move(oh)));
     } break;
     case 0x07: {
       // {reply_state, Id, {known, Msg}}
       uint16_t id;
       msgpack::object_handle oh;
       std::tie(id, oh) = parse(&msg[1], msg.size() - 1, read16, read_msgpack);
-      reply(id, Known(std::move(oh)));
+      handle_reply(id, Known(std::move(oh)));
     } break;
     case 0x08: {
       // {reply_state, Id, unknown}
       uint16_t id;
       std::tie(id) = parse(&msg[1], msg.size() - 1, read16);
-      reply(id, Unknown());
+      handle_reply(id, Unknown());
     } break;
     case 0x11: {
       // {action_call, Id, Path, Msg}
@@ -411,7 +411,7 @@ private:
     }
   }
 
-  void reply(uint16_t id, AnyResult result) {
+  void handle_reply(uint16_t id, AnyResult result) {
     std::unique_lock<std::mutex> guard(callbacks_mut);
     auto it = reply_callbacks.find(id);
     if (it == reply_callbacks.end())
