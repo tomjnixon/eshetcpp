@@ -341,13 +341,7 @@ private:
       Result r = it->second(std::move(oh));
       callbacks_guard.unlock();
 
-      // reply
-      std::lock_guard<std::mutex> guard(send_mut);
-      start_msg(std::holds_alternative<Success>(r) ? 0x05 : 0x06);
-      write16(id);
-      write_msgpack(std::visit([](const auto &x) { return x.value.get(); }, r));
-      write_size();
-      send_buf();
+      send_reply(id, std::move(r));
     } break;
     case 0x21: {
       // {prop_get, Id, Path}
@@ -364,13 +358,7 @@ private:
       Result r = it->second.first();
       callbacks_guard.unlock();
 
-      // reply
-      std::lock_guard<std::mutex> guard(send_mut);
-      start_msg(std::holds_alternative<Success>(r) ? 0x05 : 0x06);
-      write16(id);
-      write_msgpack(std::visit([](const auto &x) { return x.value.get(); }, r));
-      write_size();
-      send_buf();
+      send_reply(id, std::move(r));
     } break;
     case 0x22: {
       // {prop_set, Id, Path, Value}
@@ -389,13 +377,7 @@ private:
       Result r = it->second.second(std::move(oh));
       callbacks_guard.unlock();
 
-      // reply
-      std::lock_guard<std::mutex> guard(send_mut);
-      start_msg(std::holds_alternative<Success>(r) ? 0x05 : 0x06);
-      write16(id);
-      write_msgpack(std::visit([](const auto &x) { return x.value.get(); }, r));
-      write_size();
-      send_buf();
+      send_reply(id, std::move(r));
     } break;
     case 0x44: {
       // {state_changed, Path, {known, State}}
@@ -446,6 +428,15 @@ private:
             nh.mapped()))
       // wrong type of return
       throw ProtocolError();
+  }
+
+  void send_reply(uint16_t id, Result r) {
+    std::lock_guard<std::mutex> guard(send_mut);
+    start_msg(std::holds_alternative<Success>(r) ? 0x05 : 0x06);
+    write16(id);
+    write_msgpack(std::visit([](const auto &x) { return x.value.get(); }, r));
+    write_size();
+    send_buf();
   }
 
   void do_disconnect(std::unique_lock<std::mutex> conn_mut_guard) {
