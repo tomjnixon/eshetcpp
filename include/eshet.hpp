@@ -10,6 +10,7 @@
 #include <map>
 #include <mutex>
 #include <netdb.h>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <sys/socket.h>
@@ -22,8 +23,9 @@ namespace eshet {
 
 class ESHETClient {
 public:
-  ESHETClient(const std::string &hostname, int port)
-      : hostname(hostname), port(port), sbuf(128),
+  ESHETClient(const std::string &hostname, int port,
+              std::optional<msgpack::object> id = {})
+      : hostname(hostname), port(port), id(std::move(id)), sbuf(128),
         read_thread(&ESHETClient::read_thread_fn, this) {}
 
   ~ESHETClient() {
@@ -297,6 +299,16 @@ private:
       throw ProtocolError();
 
     switch (msg[0]) {
+    case 0x03: {
+      // {hello}
+      parse(&msg[1], msg.size() - 1);
+    } break;
+    case 0x04: {
+      // {hello_id, ClientID}
+      msgpack::object_handle oh;
+      std::tie(oh) = parse(&msg[1], msg.size() - 1, read_msgpack);
+      id = oh.get();
+    } break;
     case 0x05: {
       // {reply, Id, {ok, Msg}}
       uint16_t id;
@@ -439,6 +451,16 @@ private:
     send_buf();
   }
 
+  void send_hello_with_conn_mut() {
+    std::lock_guard<std::mutex> send_guard(send_mut);
+    start_msg(id ? 0x02 : 0x01);
+    write8(0x1);
+    if (id)
+      write_msgpack(*id);
+    write_size();
+    send_buf_with_conn_mut();
+  }
+
   void do_disconnect(std::unique_lock<std::mutex> conn_mut_guard) {
     if (sockfd >= 0) {
       close(sockfd);
@@ -468,6 +490,7 @@ private:
     while (true) {
       std::unique_lock<std::mutex> guard(conn_mut);
       if (connect_once()) {
+        send_hello_with_conn_mut();
         for (auto &cb : connect_callbacks) {
           cb_thread.call_on_thread(cb);
         }
@@ -539,6 +562,8 @@ private:
     sbuf.write((char *)header, sizeof(header));
   }
 
+  void write8(uint8_t value) { sbuf.write((char *)&value, sizeof(value)); }
+
   void write16(uint16_t value) {
     uint8_t data[] = {(uint8_t)(value >> 8), (uint8_t)(value & 0xff)};
     sbuf.write((char *)data, sizeof(data));
@@ -561,7 +586,11 @@ private:
 
   void send_buf() {
     std::lock_guard<std::mutex> lock(conn_mut);
-    if (send(sockfd, sbuf.data(), sbuf.size(), 0) < 0)
+    send_buf_with_conn_mut();
+  }
+
+  void send_buf_with_conn_mut() {
+    if (send(sockfd, sbuf.data(), sbuf.size(), MSG_NOSIGNAL) < 0)
       throw Disconnected{};
   }
 
@@ -572,6 +601,7 @@ private:
 
   std::string hostname;
   int port;
+  std::optional<msgpack::object> id;
 
   std::mutex send_mut;
   msgpack::sbuffer sbuf;
