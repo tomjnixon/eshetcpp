@@ -258,37 +258,46 @@ public:
   }
 
 private:
+  bool do_recv(uint8_t *buf, size_t size) {
+    int the_sockfd;
+    {
+      std::lock_guard<std::mutex> guard(conn_mut);
+      the_sockfd = sockfd;
+    }
+    if (the_sockfd == -1)
+      return false;
+    return recv(the_sockfd, buf, size, MSG_WAITALL) == size;
+  }
+
+  bool read_one_msg(std::vector<uint8_t> &msg_buf) {
+    uint8_t header_buf[3];
+    if (!do_recv(header_buf, sizeof(header_buf)))
+      return false;
+
+    if (header_buf[0] != 0x47)
+      return false;
+
+    uint16_t size = detail::read16(header_buf + 1, 2).first;
+    msg_buf.resize(size);
+
+    if (!do_recv(msg_buf.data(), size))
+      return false;
+
+    return true;
+  }
+
   void read_thread_fn() {
     std::vector<uint8_t> msg_buf;
     while (true) {
       if (!ensure_connected())
         return;
 
-      uint8_t header_buf[3];
-      if (recv(sockfd, header_buf, sizeof(header_buf), MSG_WAITALL) !=
-          sizeof(header_buf)) {
+      if (read_one_msg(msg_buf))
+        handle_msg(msg_buf);
+      else {
         std::lock_guard<std::mutex> guard(conn_mut);
         connected = false;
-        continue;
       }
-
-      if (header_buf[0] != 0x47) {
-        std::lock_guard<std::mutex> guard(conn_mut);
-        connected = false;
-        continue;
-      }
-
-      uint16_t size = detail::read16(header_buf + 1, 2).first;
-
-      msg_buf.resize(size);
-
-      if (recv(sockfd, msg_buf.data(), size, MSG_WAITALL) != size) {
-        std::lock_guard<std::mutex> guard(conn_mut);
-        connected = false;
-        continue;
-      }
-
-      handle_msg(msg_buf);
     }
   }
 
