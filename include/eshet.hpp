@@ -48,10 +48,11 @@ public:
 
   std::future<void> wait_connected() {
     auto p = std::make_shared<std::promise<void>>();
-    auto cb = [p, called = false]() mutable {
-      if (!called) {
+    auto called = std::make_shared<bool>(false);
+    auto cb = [p, called]() {
+      if (!*called) {
         p->set_value();
-        called = true;
+        *called = true;
       }
     };
 

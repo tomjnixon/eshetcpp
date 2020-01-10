@@ -1,3 +1,6 @@
 [submodule "submodules/msgpack-c"]
 	path = submodules/msgpack-c
 	url = https://github.com/msgpack/msgpack-c.git
+[submodule "submodules/rapidjson"]
+	path = submodules/rapidjson
+	url = https://github.com/Tencent/rapidjson.git
