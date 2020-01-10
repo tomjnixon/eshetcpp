@@ -31,7 +31,8 @@ struct Error : public HasMsgpackObject<Error>, public std::exception {
   using HasMsgpackObject<Error>::HasMsgpackObject;
   static constexpr const char *name = "Error";
 
-  Error(const Error &other) : HasMsgpackObject<Error>(other.value.get()) {}
+  Error(const Error &other)
+      : HasMsgpackObject<Error>(msgpack::clone(other.value.get())) {}
 
   const char *what() const throw() {
     if (!error_str.size()) {
