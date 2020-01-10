@@ -24,7 +24,7 @@ namespace eshet {
 class ESHETClient {
 public:
   ESHETClient(const std::string &hostname, int port,
-              std::optional<msgpack::object> id = {})
+              std::optional<msgpack::object_handle> id = {})
       : hostname(hostname), port(port), id(std::move(id)), sbuf(128),
         read_thread(&ESHETClient::read_thread_fn, this) {}
 
@@ -327,9 +327,7 @@ private:
     } break;
     case 0x04: {
       // {hello_id, ClientID}
-      msgpack::object_handle oh;
-      std::tie(oh) = parse(&msg[1], msg.size() - 1, read_msgpack);
-      id = oh.get();
+      std::tie(id) = parse(&msg[1], msg.size() - 1, read_msgpack);
     } break;
     case 0x05: {
       // {reply, Id, {ok, Msg}}
@@ -478,7 +476,7 @@ private:
     start_msg(id ? 0x02 : 0x01);
     write8(0x1);
     if (id)
-      write_msgpack(*id);
+      write_msgpack(id->get());
     write_size();
     send_buf_with_conn_mut();
   }
@@ -623,7 +621,7 @@ private:
 
   std::string hostname;
   int port;
-  std::optional<msgpack::object> id;
+  std::optional<msgpack::object_handle> id;
 
   std::mutex send_mut;
   msgpack::sbuffer sbuf;
