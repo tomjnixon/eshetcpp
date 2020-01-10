@@ -179,17 +179,29 @@ public:
     });
   }
 
-  template <typename... T>
-  void action_call(const std::string &path, ResultCB cb, const T &... value) {
+  template <typename T>
+  void action_call_pack(const std::string &path, ResultCB cb, const T &value) {
     std::lock_guard<std::mutex> guard(send_mut);
     start_msg(0x11);
     uint16_t id = get_id();
     write16(id);
     write_string(path);
-    write_msgpack(std::make_tuple(value...));
+    write_msgpack(value);
     add_reply_cb(id, std::move(cb));
     write_size();
     send_buf();
+  }
+
+  template <typename... T>
+  void action_call(const std::string &path, ResultCB cb, const T &... value) {
+    action_call_pack(std::move(path), std::move(cb), std::make_tuple(value...));
+  }
+
+  template <typename T>
+  std::future<Success> action_call_pack_promise(const std::string &path,
+                                                const T &value) {
+    return detail::wrap_promise<Success, Result>(
+        [&](auto cb) { action_call_pack(path, std::move(cb), value); });
   }
 
   template <typename... T>
