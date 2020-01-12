@@ -29,6 +29,10 @@ public:
       : hostname(hostname), port(port), id(std::move(id)), sbuf(128),
         read_thread(&ESHETClient::read_thread_fn, this) {}
 
+  ESHETClient(const std::pair<std::string, int> &hostport,
+              std::optional<msgpack::object_handle> id = {})
+      : ESHETClient(hostport.first, hostport.second, std::move(id)) {}
+
   ~ESHETClient() {
     disconnect();
     read_thread.join();
