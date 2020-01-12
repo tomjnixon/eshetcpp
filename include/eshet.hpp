@@ -1,6 +1,7 @@
 #pragma once
 #include "eshet/callback_thread.hpp"
 #include "eshet/data.hpp"
+#include "eshet/log.hpp"
 #include "eshet/parse.hpp"
 #include "eshet/util.hpp"
 #include <condition_variable>
@@ -268,6 +269,10 @@ public:
   std::future<Success> set(const std::string &path, const T &value) {
     return detail::wrap_promise<Success, Result>(
         [&](auto cb) { set(path, value, std::move(cb)); });
+  }
+
+  void set_log_callbacks(std::shared_ptr<LogCallbacks> new_log_callbacks) {
+    log.set_log_callbacks(new_log_callbacks);
   }
 
 private:
@@ -546,19 +551,19 @@ private:
     int err = getaddrinfo(hostname.c_str(), port_str.c_str(), &hints, &res);
 
     if (err != 0 || res == NULL) {
-      std::cerr << "eshet: dns lookup failed" << std::endl;
+      log.error("dns lookup failed");
       return false;
     }
 
     sockfd = socket(res->ai_family, res->ai_socktype, 0);
     if (sockfd < 0) {
-      std::cerr << "eshet: failed to allocate socket" << std::endl;
+      log.error("failed to allocate socket");
       freeaddrinfo(res);
       return false;
     }
 
     if (connect(sockfd, res->ai_addr, res->ai_addrlen) != 0) {
-      std::cerr << "eshet: failed to connect" << std::endl;
+      log.error("failed to connect");
       close(sockfd);
       sockfd = -1;
       freeaddrinfo(res);
@@ -567,7 +572,7 @@ private:
 
     freeaddrinfo(res);
 
-    std::cerr << "eshet: connected" << std::endl;
+    log.debug("connected");
 
     connected = true;
     return true;
@@ -622,6 +627,8 @@ private:
   std::string hostname;
   int port;
   std::optional<msgpack::object_handle> id;
+
+  Logger log;
 
   std::mutex send_mut;
   msgpack::sbuffer sbuf;
