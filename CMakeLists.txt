@@ -19,3 +19,4 @@ target_link_libraries (eshetcpp INTERFACE ${CMAKE_THREAD_LIBS_INIT})
 
 include(CTest)
 add_subdirectory(test)
+add_subdirectory(src)
