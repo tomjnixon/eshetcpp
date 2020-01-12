@@ -2,6 +2,7 @@
 #include "eshet.hpp"
 #include "rapidjson/document.h"
 #include "rapidjson/error/en.h"
+#include "utils.hpp"
 #include <sstream>
 #include <string>
 
@@ -64,26 +65,6 @@ msgpack::object_handle json_str_to_msgpack(std::string json) {
   return {obj, std::move(zone)};
 }
 
-std::tuple<std::string, int> get_host_port() {
-  std::string host = "localhost";
-  int port = 11236;
-
-  char *hostport_chr = getenv("ESHET_SERVER");
-  if (hostport_chr != NULL) {
-    std::string hostport(hostport_chr);
-
-    size_t colon_pos = hostport.find(':');
-    if (colon_pos == std::string::npos) {
-      host = hostport;
-    } else {
-      host = hostport.substr(0, colon_pos);
-      port = std::stoi(hostport.substr(colon_pos + 1));
-    }
-  }
-
-  return std::make_tuple(host, port);
-}
-
 int main(int argc, char **argv) {
   CLI::App app{"eshet CLI"};
 
@@ -100,7 +81,7 @@ int main(int argc, char **argv) {
     for (auto &arg : args)
       args_o.emplace_back(json_str_to_msgpack(arg, *zone));
 
-    ESHETClient client("localhost", 11236);
+    ESHETClient client(get_host_port());
     client.wait_connected().get();
     try {
       auto res = client.action_call_pack_promise(path, args_o).get();
