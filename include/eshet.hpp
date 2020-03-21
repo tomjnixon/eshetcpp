@@ -53,18 +53,18 @@ public:
     return true;
   }
 
-  void connect() {
+  bool connect() {
     // call connect_once until true, with exponential sleep, waiting on exit
     std::chrono::seconds delay(1);
     std::chrono::seconds max_delay(30);
 
     while (true) {
       if (connect_once())
-        return;
+        return true;
 
       // XXX: wait with timeout
       if (should_exit.readable())
-        return;
+        return false;
       std::this_thread::sleep_for(delay);
 
       delay *= 2;
@@ -73,56 +73,85 @@ public:
     }
   }
 
-  void do_hello() {
+  // send and recieve hello messages, returns success
+  bool do_hello() {
     send_buf.start_msg(id ? 0x02 : 0x01);
     send_buf.write8(1);
     if (id)
       send_buf.write_msgpack(id->get());
     send_buf.write_size();
     send_send_buf();
-    // XXX: recieve reply here
-  }
 
-  void run() {
-    // channels: on_message, on_close, exit, command
     while (true) {
-    do_connect:
-      connect();
-      // XXX: error during hello causes tight reconnect loop
-      do_hello();
-      while (true) {
-        switch (wait(on_close, on_message, on_command, should_exit)) {
-        case 0: {
-          on_close.read(); // XXX: do something with this
-          goto do_connect;
-        } break;
-        case 1: {
-          std::vector<uint8_t> data = on_message.read();
-          unpacker.push(data);
+      switch (wait(on_close, on_message, should_exit)) {
+      case 0:
+        on_close.read();
+        return false;
+      case 1: {
+        unpacker.push(on_message.read());
 
-          std::optional<std::vector<uint8_t>> message;
-          while ((message = unpacker.read())) {
-            handle_message(*message);
-          }
-        } break;
-        case 2: {
-          Command c = on_command.read();
-          std::visit(CommandVisitor(*this), std::move(c));
-        } break;
-        case 3: {
-          if (should_exit.read()) {
-            if (recv_thread)
-              recv_thread->exit();
-            // XXX: close connection
-            return;
-          }
-        } break;
+        std::optional<std::vector<uint8_t>> message;
+        if ((message = unpacker.read())) {
+          handle_hello_message(*message);
+
+          // no reason for the server to have sent us any more messages here
+          assert(!unpacker.read());
+          return true;
         }
+      } break;
+      case 2:
+        return false;
       }
     }
   }
 
-  void handle_message(const std::vector<uint8_t> &msg) {
+  void run() {
+    while (true) {
+      // exponential backoff here depending on how long loop has ran for
+      loop();
+
+      if (should_exit.readable() && should_exit.read()) {
+        if (recv_thread)
+          recv_thread->exit();
+        // XXX: close connection
+        return;
+      }
+    }
+  }
+
+  // connect, say hello, then loop recieving messages; returns if there was an
+  // error, or if we should exit
+  void loop() {
+    if (!connect())
+      return;
+    if (!do_hello())
+      return;
+
+    while (true) {
+      switch (wait(on_close, on_message, on_command, should_exit)) {
+      case 0: {
+        on_close.read(); // XXX: do something with this
+        return;
+      } break;
+      case 1: {
+        unpacker.push(on_message.read());
+
+        std::optional<std::vector<uint8_t>> message;
+        while ((message = unpacker.read())) {
+          handle_message(*message);
+        }
+      } break;
+      case 2: {
+        Command c = on_command.read();
+        std::visit(CommandVisitor(*this), std::move(c));
+      } break;
+      case 3:
+        return;
+      }
+    }
+  }
+
+  void handle_hello_message(const std::vector<uint8_t> &msg) {
     if (msg.size() < 1)
       throw ProtocolError();
 
@@ -135,6 +164,19 @@ public:
       // {hello_id, ClientID}
       std::tie(id) = parse(&msg[1], msg.size() - 1, read_msgpack);
     } break;
+    default:
+      throw ProtocolError();
+    }
+  }
+
+  void handle_message(const std::vector<uint8_t> &msg) {
+    if (msg.size() < 1)
+      throw ProtocolError();
+
+    switch (msg[0]) {
+    case 0x03:
+    case 0x04:
+      throw ProtocolError(); // shouldn't get a hello message
     case 0x05: {
       // {reply, Id, {ok, Msg}}
       uint16_t id;
