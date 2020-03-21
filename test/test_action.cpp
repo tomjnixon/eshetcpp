@@ -5,27 +5,35 @@ using namespace eshet;
 #define NS "/eshetcpp_test_action"
 
 TEST_CASE("make and call") {
-  ESHETClient client("localhost", 11236);
-  client.on_connect([&] {
-    client
-        .action_register(NS "/action",
-                         [&](msgpack::object_handle args) {
-                           std::tuple<int> argss;
-                           args.get().convert(argss);
-                           return Success(std::get<0>(argss) + 1);
-                         })
-        .get();
-  });
+  ActorThread<ESHETClient> client1("localhost", 11236);
 
-  client.wait_connected().get();
+  Actor self;
+  Channel<std::tuple<uint16_t, msgpack::object_handle>> action_chan(self);
+  Channel<Result> result_chan(self);
 
-  ESHETClient client2("localhost", 11236);
+  // register on client1
+  client1.action_register(NS "/action", result_chan, action_chan);
+  REQUIRE(std::holds_alternative<Success>(result_chan.read()));
 
-  client2.wait_connected().get();
+  // call on client2
+  Actor self2;
+  Channel<Result> call_result(self2);
+  ActorThread<ESHETClient> client2("localhost", 11236);
+  client2.action_call_pack(NS "/action", call_result, std::make_tuple(5));
 
-  auto res = client2.action_call_promise(NS "/action", 5).get();
-  REQUIRE(res.as<int>() == 6);
+  auto call = action_chan.read();
+  std::tuple<int> args;
+  // int x;
+  std::get<1>(call).get().convert(args);
+  REQUIRE(std::get<0>(args) == 5);
 
-  auto res2 = client2.action_call_promise(NS "/actionz", 5);
-  REQUIRE_THROWS_AS(res2.get().as<int>(), Error);
+
+  /* auto res = client2.action_call_promise(NS "/action", 5).get(); */
+  /* REQUIRE(res.as<int>() == 6); */
+
+  /* auto res2 = client2.action_call_promise(NS "/actionz", 5); */
+  /* REQUIRE_THROWS_AS(res2.get().as<int>(), Error); */
+
+  client1.exit();
+  client2.exit();
 }

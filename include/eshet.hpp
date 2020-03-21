@@ -1,331 +1,128 @@
 #pragma once
-#include "eshet/callback_thread.hpp"
+#include "actorpp/actor.hpp"
+#include "actorpp/net.hpp"
+#include "eshet/commands.hpp"
 #include "eshet/data.hpp"
 #include "eshet/log.hpp"
-#include "eshet/parse.hpp"
+#include "eshet/unpack.hpp"
 #include "eshet/util.hpp"
-#include <condition_variable>
-#include <functional>
-#include <future>
-#include <iostream>
-#include <map>
-#include <mutex>
-#include <netdb.h>
-#include <optional>
-#include <sstream>
 #include <string>
-#include <sys/socket.h>
-#include <thread>
-#include <unistd.h>
-#include <utility>
-#include <variant>
 
 namespace eshet {
+using namespace actorpp;
+using namespace detail;
 
-class ESHETClient {
+class ESHETClient : public Actor {
 public:
   ESHETClient(const std::string &hostname, int port,
               std::optional<msgpack::object_handle> id = {})
-      : hostname(hostname), port(port), id(std::move(id)), sbuf(128),
-        read_thread(&ESHETClient::read_thread_fn, this) {}
+      : hostname(hostname), port(port), id(std::move(id)), should_exit(*this),
+        on_message(*this), on_close(*this), on_command(*this), send_buf(128) {}
 
   ESHETClient(const std::pair<std::string, int> &hostport,
               std::optional<msgpack::object_handle> id = {})
       : ESHETClient(hostport.first, hostport.second, std::move(id)) {}
 
-  ~ESHETClient() {
-    disconnect();
-    read_thread.join();
-  }
-
-  // register a callback to be called when the connection has been made
-  void on_connect(std::function<void(void)> cb) {
-    std::lock_guard<std::mutex> guard(conn_mut);
-
-    // do this in the conn_mut mutex to ensure it doesn't get
-    // called twice
-    if (connected) {
-      cb_thread.call_on_thread(cb);
-    }
-
-    connect_callbacks.emplace_back(std::move(cb));
-  }
-
-  std::future<void> wait_connected() {
-    auto p = std::make_shared<std::promise<void>>();
-    auto called = std::make_shared<bool>(false);
-    auto cb = [p, called]() {
-      if (!*called) {
-        p->set_value();
-        *called = true;
-      }
-    };
-
-    on_connect(std::move(cb));
-
-    return p->get_future();
-  }
-
-  // disconnect and wait for cleanup to finish
-  void disconnect() {
-    std::unique_lock<std::mutex> cv_guard(conn_mut);
-    if (should_disconnect)
-      return;
-    should_disconnect = 1;
-
-    if (sockfd >= 0) {
-      shutdown(sockfd, SHUT_RDWR);
-      close(sockfd);
-      sockfd = -1;
-      connected = false;
-    }
-
-    cv_guard.unlock();
-    conn_cv.notify_one();
-    cv_guard.lock();
-
-    conn_cv.wait(cv_guard, [&] { return !connected; });
-  }
-
-  // register a state
-  void state_register(const std::string &path, std::function<void(Result)> cb) {
-    std::lock_guard<std::mutex> guard(send_mut);
-    start_msg(0x40);
-    uint16_t id = get_id();
-    write16(id);
-    write_string(path);
-    add_reply_cb(id, std::move(cb));
-    write_size();
-    send_buf();
-  }
-
-  std::future<Success> state_register(const std::string &path) {
-    return detail::wrap_promise<Success, Result>(
-        [&](auto cb) { state_register(path, std::move(cb)); });
-  }
-
-  // notify observers that a registered state has changed
   template <typename T>
-  void state_changed(const std::string &path, const T &value,
-                     std::function<void(Result)> cb) {
-    std::lock_guard<std::mutex> guard(send_mut);
-    start_msg(0x41);
-    uint16_t id = get_id();
-    write16(id);
-    write_string(path);
-    write_msgpack(value);
-    add_reply_cb(id, std::move(cb));
-    write_size();
-    send_buf();
+  void action_call_pack(std::string path, Channel<Result> result_chan,
+                        const T &args) {
+    std::unique_ptr<msgpack::zone> z = std::make_unique<msgpack::zone>();
+    msgpack::object_handle oh(msgpack::object(args, *z), std::move(z));
+    on_command.emplace(Call{path, result_chan, std::move(oh)});
   }
 
-  template <typename T>
-  std::future<Success> state_changed(const std::string &path, const T &value) {
-    return detail::wrap_promise<Success, Result>(
-        [&](auto cb) { state_changed(path, value, std::move(cb)); });
+  void action_register(
+      std::string path, Channel<Result> result_chan,
+      Channel<std::tuple<uint16_t, msgpack::object_handle>> call_chan) {
+    on_command.emplace(ActionRegister{path, result_chan, call_chan});
   }
 
-  // notify observers that a registered state is unknown
-  void state_unknown(const std::string &path, std::function<void(Result)> cb) {
-    std::lock_guard<std::mutex> guard(send_mut);
-    start_msg(0x42);
-    uint16_t id = get_id();
-    write16(id);
-    write_string(path);
-    add_reply_cb(id, std::move(cb));
-    write_size();
-    send_buf();
-  }
+  bool connect_once() {
+    if (recv_thread)
+      recv_thread->exit();
 
-  std::future<Success> state_unknown(const std::string &path) {
-    return detail::wrap_promise<Success, Result>(
-        [&](auto cb) { state_unknown(path, std::move(cb)); });
-  }
-
-  // observe a state. cb will be called with the state once during
-  // registration, then once whenever it changes
-  // XXX: should call cb when disconnected
-  void state_observe(const std::string &path,
-                     std::function<void(StateResult)> cb) {
-    std::lock_guard<std::mutex> guard(send_mut);
-    start_msg(0x43);
-    uint16_t id = get_id();
-    write16(id);
-    write_string(path);
-    add_reply_cb(id, cb);
-    {
-      std::lock_guard<std::mutex> guard(callbacks_mut);
-      state_callbacks.emplace(std::make_pair(path, std::move(cb)));
-    }
-    write_size();
-    send_buf();
-  }
-
-  void action_register(const std::string &path, ActionCB action_cb,
-                       ResultCB register_cb) {
-    std::lock_guard<std::mutex> guard(send_mut);
-    start_msg(0x10);
-    uint16_t id = get_id();
-    write16(id);
-    write_string(path);
-    add_reply_cb(id, std::move(register_cb));
-    {
-      std::lock_guard<std::mutex> guard(callbacks_mut);
-      action_callbacks.emplace(std::make_pair(path, std::move(action_cb)));
-    }
-    write_size();
-    send_buf();
-  }
-
-  std::future<Success> action_register(const std::string &path,
-                                       ActionCB action_cb) {
-    return detail::wrap_promise<Success, Result>([&](auto cb) {
-      action_register(path, std::move(action_cb), std::move(cb));
-    });
-  }
-
-  template <typename T>
-  void action_call_pack(const std::string &path, ResultCB cb, const T &value) {
-    std::lock_guard<std::mutex> guard(send_mut);
-    start_msg(0x11);
-    uint16_t id = get_id();
-    write16(id);
-    write_string(path);
-    write_msgpack(value);
-    add_reply_cb(id, std::move(cb));
-    write_size();
-    send_buf();
-  }
-
-  template <typename... T>
-  void action_call(const std::string &path, ResultCB cb, const T &... value) {
-    action_call_pack(std::move(path), std::move(cb), std::make_tuple(value...));
-  }
-
-  template <typename T>
-  std::future<Success> action_call_pack_promise(const std::string &path,
-                                                const T &value) {
-    return detail::wrap_promise<Success, Result>(
-        [&](auto cb) { action_call_pack(path, std::move(cb), value); });
-  }
-
-  template <typename... T>
-  std::future<Success> action_call_promise(const std::string &path,
-                                           const T &... value) {
-    return detail::wrap_promise<Success, Result>(
-        [&](auto cb) { action_call(path, std::move(cb), value...); });
-  }
-
-  void prop_register(const std::string &path, GetCB get_cb, SetCB set_cb,
-                     ResultCB register_cb) {
-    std::lock_guard<std::mutex> guard(send_mut);
-    start_msg(0x20);
-    uint16_t id = get_id();
-    write16(id);
-    write_string(path);
-    add_reply_cb(id, std::move(register_cb));
-    {
-      std::lock_guard<std::mutex> guard(callbacks_mut);
-      prop_callbacks.emplace(std::make_pair(
-          path, std::make_pair(std::move(get_cb), std::move(set_cb))));
-    }
-    write_size();
-    send_buf();
-  }
-
-  std::future<Success> prop_register(const std::string &path, GetCB get_cb,
-                                     SetCB set_cb) {
-    return detail::wrap_promise<Success, Result>([&](auto cb) {
-      prop_register(path, std::move(get_cb), std::move(set_cb), std::move(cb));
-    });
-  }
-
-  void get(const std::string &path, ResultCB cb) {
-    std::lock_guard<std::mutex> guard(send_mut);
-    start_msg(0x23);
-    uint16_t id = get_id();
-    write16(id);
-    write_string(path);
-    add_reply_cb(id, std::move(cb));
-    write_size();
-    send_buf();
-  }
-
-  std::future<Success> get(const std::string &path) {
-    return detail::wrap_promise<Success, Result>(
-        [&](auto cb) { get(path, std::move(cb)); });
-  }
-
-  template <typename T>
-  void set(const std::string &path, const T &value, ResultCB cb) {
-    std::lock_guard<std::mutex> guard(send_mut);
-    start_msg(0x24);
-    uint16_t id = get_id();
-    write16(id);
-    write_string(path);
-    write_msgpack(value);
-    add_reply_cb(id, std::move(cb));
-    write_size();
-    send_buf();
-  }
-
-  template <typename T>
-  std::future<Success> set(const std::string &path, const T &value) {
-    return detail::wrap_promise<Success, Result>(
-        [&](auto cb) { set(path, value, std::move(cb)); });
-  }
-
-  void set_log_callbacks(std::shared_ptr<LogCallbacks> new_log_callbacks) {
-    log.set_log_callbacks(new_log_callbacks);
-  }
-
-private:
-  bool do_recv(uint8_t *buf, size_t size) {
-    int the_sockfd;
-    {
-      std::lock_guard<std::mutex> guard(conn_mut);
-      the_sockfd = sockfd;
-    }
-    if (the_sockfd == -1)
+    try {
+      sockfd = actorpp::connect(hostname, port);
+    } catch (std::runtime_error &e) {
+      log.error(e.what());
       return false;
-    return recv(the_sockfd, buf, size, MSG_WAITALL) == size;
-  }
+    }
 
-  bool read_one_msg(std::vector<uint8_t> &msg_buf) {
-    uint8_t header_buf[3];
-    if (!do_recv(header_buf, sizeof(header_buf)))
-      return false;
-
-    if (header_buf[0] != 0x47)
-      return false;
-
-    uint16_t size = detail::read16(header_buf + 1, 2).first;
-    msg_buf.resize(size);
-
-    if (!do_recv(msg_buf.data(), size))
-      return false;
-
+    recv_thread = std::make_unique<actorpp::ActorThread<actorpp::RecvThread>>(
+        sockfd, on_message, on_close);
     return true;
   }
 
-  void read_thread_fn() {
-    std::vector<uint8_t> msg_buf;
+  void connect() {
+    // call connect_once until true, with exponential sleep, waiting on exit
+    std::chrono::seconds delay(1);
+    std::chrono::seconds max_delay(30);
+
     while (true) {
-      if (!ensure_connected())
+      if (connect_once())
         return;
 
-      if (read_one_msg(msg_buf))
-        handle_msg(msg_buf);
-      else {
-        std::lock_guard<std::mutex> guard(conn_mut);
-        connected = false;
+      // XXX: wait with timeout
+      if (should_exit.readable())
+        return;
+      std::this_thread::sleep_for(delay);
+
+      delay *= 2;
+      if (delay > max_delay)
+        delay = max_delay;
+    }
+  }
+
+  void do_hello() {
+    send_buf.start_msg(id ? 0x02 : 0x01);
+    send_buf.write8(1);
+    if (id)
+      send_buf.write_msgpack(id->get());
+    send_buf.write_size();
+    send_send_buf();
+    // XXX: recieve reply here
+  }
+
+  void run() {
+    // channels: on_message, on_close, exit, command
+    while (true) {
+    do_connect:
+      connect();
+      // XXX: error during hello causes tight reconnect loop
+      do_hello();
+      while (true) {
+        switch (wait(on_close, on_message, on_command, should_exit)) {
+        case 0: {
+          on_close.read(); // XXX: do something with this
+          goto do_connect;
+        } break;
+        case 1: {
+          std::vector<uint8_t> data = on_message.read();
+          unpacker.push(data);
+
+          std::optional<std::vector<uint8_t>> message;
+          while ((message = unpacker.read())) {
+            handle_message(*message);
+          }
+        } break;
+        case 2: {
+          Command c = on_command.read();
+          std::visit(CommandVisitor(*this), std::move(c));
+        } break;
+        case 3: {
+          if (should_exit.read()) {
+            if (recv_thread)
+              recv_thread->exit();
+            // XXX: close connection
+            return;
+          }
+        } break;
+        }
       }
     }
   }
 
-  void handle_msg(const std::vector<uint8_t> &msg) {
-    using namespace detail;
-
+  void handle_message(const std::vector<uint8_t> &msg) {
     if (msg.size() < 1)
       throw ProtocolError();
 
@@ -373,287 +170,98 @@ private:
       std::tie(id, path, oh) =
           parse(&msg[1], msg.size() - 1, read16, read_string, read_msgpack);
 
-      std::unique_lock<std::mutex> callbacks_guard(callbacks_mut);
-      auto it = action_callbacks.find(path);
-      if (it == action_callbacks.end())
+      auto it = action_channels.find(path);
+      if (it == action_channels.end())
         // missing callback
         throw ProtocolError();
 
-      Result r = it->second(std::move(oh));
-      callbacks_guard.unlock();
-
-      send_reply(id, std::move(r));
-    } break;
-    case 0x21: {
-      // {prop_get, Id, Path}
-      uint16_t id;
-      std::string path;
-      std::tie(id, path) = parse(&msg[1], msg.size() - 1, read16, read_string);
-
-      std::unique_lock<std::mutex> callbacks_guard(callbacks_mut);
-      auto it = prop_callbacks.find(path);
-      if (it == prop_callbacks.end())
-        // missing callback
-        throw ProtocolError();
-
-      Result r = it->second.first();
-      callbacks_guard.unlock();
-
-      send_reply(id, std::move(r));
-    } break;
-    case 0x22: {
-      // {prop_set, Id, Path, Value}
-      uint16_t id;
-      std::string path;
-      msgpack::object_handle oh;
-      std::tie(id, path, oh) =
-          parse(&msg[1], msg.size() - 1, read16, read_string, read_msgpack);
-
-      std::unique_lock<std::mutex> callbacks_guard(callbacks_mut);
-      auto it = prop_callbacks.find(path);
-      if (it == prop_callbacks.end())
-        // missing callback
-        throw ProtocolError();
-
-      Result r = it->second.second(std::move(oh));
-      callbacks_guard.unlock();
-
-      send_reply(id, std::move(r));
-    } break;
-    case 0x44: {
-      // {state_changed, Path, {known, State}}
-      std::string path;
-      msgpack::object_handle oh;
-      std::tie(path, oh) =
-          parse(&msg[1], msg.size() - 1, read_string, read_msgpack);
-
-      std::lock_guard<std::mutex> guard(callbacks_mut);
-      auto it = state_callbacks.find(path);
-      if (it == state_callbacks.end())
-        // missing callback
-        throw ProtocolError();
-      it->second(Known(std::move(oh)));
-    } break;
-    case 0x45: {
-      // {state_changed, Path, unknown}
-      std::string path;
-      std::tie(path) = parse(&msg[1], msg.size() - 1, read_string);
-
-      std::lock_guard<std::mutex> guard(callbacks_mut);
-      auto it = state_callbacks.find(path);
-      if (it == state_callbacks.end())
-        // missing callback
-        throw ProtocolError();
-      it->second(Unknown());
-    } break;
-    default: {
-      assert(false); // unknown message
+      it->second.emplace(id, std::move(oh));
     } break;
     }
   }
 
   void handle_reply(uint16_t id, AnyResult result) {
-    std::unique_lock<std::mutex> guard(callbacks_mut);
-    auto it = reply_callbacks.find(id);
-    if (it == reply_callbacks.end())
+    auto it = reply_channels.find(id);
+    if (it == reply_channels.end())
       // missing callback
       throw ProtocolError();
 
-    auto nh = reply_callbacks.extract(it);
-    guard.unlock();
-
+    auto nh = reply_channels.extract(it);
     if (!std::visit(
             [&](auto &cb) {
-              return detail::convert_variant(std::move(result), cb);
+              using T =
+                  typename std::remove_reference<decltype(cb)>::type::type;
+              return detail::convert_variant(
+                  std::move(result),
+                  [&](T result_t) { return cb.push(std::move(result_t)); });
             },
             nh.mapped()))
       // wrong type of return
       throw ProtocolError();
   }
 
-  void send_reply(uint16_t id, Result r) {
-    std::lock_guard<std::mutex> guard(send_mut);
-    start_msg(std::holds_alternative<Success>(r) ? 0x05 : 0x06);
-    write16(id);
-    write_msgpack(std::visit([](const auto &x) { return x.value.get(); }, r));
-    write_size();
-    send_buf();
-  }
+  struct CommandVisitor {
+    CommandVisitor(ESHETClient &c) : c(c) {}
 
-  void send_hello_with_conn_mut() {
-    std::lock_guard<std::mutex> send_guard(send_mut);
-    start_msg(id ? 0x02 : 0x01);
-    write8(0x1);
-    if (id)
-      write_msgpack(id->get());
-    write_size();
-    send_buf_with_conn_mut();
-  }
-
-  void do_disconnect(std::unique_lock<std::mutex> conn_mut_guard) {
-    if (sockfd >= 0) {
-      close(sockfd);
-      sockfd = -1;
-      connected = false;
-      conn_mut_guard.unlock();
-      conn_cv.notify_one();
-    }
-  }
-
-  bool ensure_connected() {
-    {
-      std::unique_lock<std::mutex> guard(conn_mut);
-      if (should_disconnect) {
-        if (connected)
-          do_disconnect(std::move(guard));
-        return false;
-      } else {
-        if (connected)
-          return true;
-      }
+    void operator()(Call cmd) {
+      c.send_buf.start_msg(0x11);
+      uint16_t id = c.get_id();
+      c.send_buf.write16(id);
+      c.send_buf.write_string(cmd.path);
+      c.send_buf.write_msgpack(*cmd.args);
+      c.reply_channels.emplace(id, std::move(cmd.result_chan));
+      c.send_buf.write_size();
+      c.send_send_buf();
     }
 
-    std::chrono::seconds delay(1);
-    std::chrono::seconds max_delay(30);
-
-    while (true) {
-      std::unique_lock<std::mutex> guard(conn_mut);
-      if (connect_once()) {
-        send_hello_with_conn_mut();
-        for (auto &cb : connect_callbacks) {
-          cb_thread.call_on_thread(cb);
-        }
-        return true;
-      }
-
-      if (conn_cv.wait_for(guard, delay, [&] { return should_disconnect; }))
-        return false;
-
-      delay *= 2;
-      if (delay > max_delay)
-        delay = max_delay;
-    }
-  }
-
-  // set up the connection; conn_mut must be held
-  bool connect_once() {
-    if (connected)
-      return true;
-
-    if (sockfd >= 0) {
-      close(sockfd);
-      sockfd = -1;
+    void operator()(ActionRegister cmd) {
+      c.send_buf.start_msg(0x10);
+      uint16_t id = c.get_id();
+      c.send_buf.write16(id);
+      c.send_buf.write_string(cmd.path);
+      c.reply_channels.emplace(id, std::move(cmd.result_chan));
+      c.action_channels.emplace(cmd.path, std::move(cmd.call_chan));
+      c.send_buf.write_size();
+      c.send_send_buf();
     }
 
-    struct addrinfo hints;
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_STREAM;
-    struct addrinfo *res;
+    ESHETClient &c;
+  };
 
-    std::string port_str = std::to_string(port);
-    int err = getaddrinfo(hostname.c_str(), port_str.c_str(), &hints, &res);
-
-    if (err != 0 || res == NULL) {
-      log.error("dns lookup failed");
-      return false;
-    }
-
-    sockfd = socket(res->ai_family, res->ai_socktype, 0);
-    if (sockfd < 0) {
-      log.error("failed to allocate socket");
-      freeaddrinfo(res);
-      return false;
-    }
-
-    if (connect(sockfd, res->ai_addr, res->ai_addrlen) != 0) {
-      log.error("failed to connect");
-      close(sockfd);
-      sockfd = -1;
-      freeaddrinfo(res);
-      return false;
-    }
-
-    freeaddrinfo(res);
-
-    log.debug("connected");
-
-    connected = true;
-    return true;
-  }
-
-private:
   uint16_t get_id() { return next_id++; }
 
-  void start_msg(uint8_t type) {
-    sbuf.clear();
-    uint8_t header[] = {0x47, 0, 0, type};
-    sbuf.write((char *)header, sizeof(header));
-  }
-
-  void write8(uint8_t value) { sbuf.write((char *)&value, sizeof(value)); }
-
-  void write16(uint16_t value) {
-    uint8_t data[] = {(uint8_t)(value >> 8), (uint8_t)(value & 0xff)};
-    sbuf.write((char *)data, sizeof(data));
-  }
-
-  void write_string(const std::string &s) {
-    sbuf.write(s.c_str(), s.size() + 1);
-  }
-
-  template <typename T> void write_msgpack(const T &value) {
-    msgpack::pack(sbuf, value);
-  }
-
-  void write_size() {
-    size_t size = sbuf.size() - 3;
-    uint8_t size_fmt[] = {(uint8_t)(size >> 8), (uint8_t)(size & 0xff)};
-    sbuf.data()[1] = size_fmt[0];
-    sbuf.data()[2] = size_fmt[1];
-  }
-
-  void send_buf() {
-    std::lock_guard<std::mutex> lock(conn_mut);
-    send_buf_with_conn_mut();
-  }
-
-  void send_buf_with_conn_mut() {
-    if (send(sockfd, sbuf.data(), sbuf.size(), MSG_NOSIGNAL) < 0)
+  void send_send_buf() {
+    if (send(sockfd, send_buf.sbuf.data(), send_buf.sbuf.size(), MSG_NOSIGNAL) <
+        0)
       throw Disconnected{};
   }
 
-  void add_reply_cb(uint16_t id, ReplyCB cb) {
-    std::lock_guard<std::mutex> guard(callbacks_mut);
-    reply_callbacks.emplace(std::make_pair(id, std::move(cb)));
-  }
+  void exit() { should_exit.push(true); }
 
+private:
   std::string hostname;
   int port;
   std::optional<msgpack::object_handle> id;
 
   Logger log;
 
-  std::mutex send_mut;
-  msgpack::sbuffer sbuf;
+  Channel<bool> should_exit;
+
+  int sockfd;
+  Channel<std::vector<uint8_t>> on_message;
+  Channel<CloseReason> on_close;
+  std::unique_ptr<ActorThread<RecvThread>> recv_thread;
+
+  Unpacker unpacker;
+
+  using ReplyChannel = std::variant<Channel<Result>, Channel<StateResult>>;
+  std::map<uint16_t, ReplyChannel> reply_channels;
+  std::map<std::string, Channel<std::tuple<uint16_t, msgpack::object_handle>>>
+      action_channels;
+
+  Channel<Command> on_command;
+
+  SendBuf send_buf;
   uint16_t next_id = 0;
-
-  std::mutex conn_mut;
-  std::condition_variable conn_cv;
-  int sockfd = -1;
-  bool connected = false;
-  bool should_disconnect = false;
-  std::vector<std::function<void(void)>> connect_callbacks;
-
-  std::mutex callbacks_mut;
-  std::map<uint16_t, ReplyCB> reply_callbacks;
-  std::map<std::string, StateResultCB> state_callbacks;
-  std::map<std::string, ActionCB> action_callbacks;
-  std::map<std::string, std::pair<GetCB, SetCB>> prop_callbacks;
-
-  std::thread read_thread;
-
-  CallbackThread cb_thread;
-};
-
+}; // namespace eshet
 } // namespace eshet

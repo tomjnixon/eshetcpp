@@ -16,6 +16,7 @@ target_include_directories(eshetcpp
 # set_property(TARGET eshetcpp PROPERTY CXX_STANDARD 17)
 target_compile_features(eshetcpp INTERFACE cxx_std_17)
 target_link_libraries (eshetcpp INTERFACE ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries (eshetcpp INTERFACE actorpp)
 
 include(CTest)
 add_subdirectory(test)

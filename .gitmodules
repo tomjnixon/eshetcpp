@@ -4,3 +4,6 @@
 [submodule "submodules/rapidjson"]
 	path = submodules/rapidjson
 	url = https://github.com/Tencent/rapidjson.git
+[submodule "submodules/actorpp"]
+	path = submodules/actorpp
+	url = https://github.com/tomjnixon/actorpp.git

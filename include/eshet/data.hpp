@@ -58,17 +58,8 @@ struct Unknown {};
 
 using StateResult = std::variant<Known, Unknown, Error>;
 
-using ResultCB = std::function<void(Result)>;
-using StateResultCB = std::function<void(StateResult)>;
-
-using ActionCB = std::function<Result(msgpack::object_handle args)>;
-
-using GetCB = std::function<Result(void)>;
-using SetCB = std::function<Result(msgpack::object_handle args)>;
-
 using AnyResult = std::variant<Success, Known, Unknown, Error>;
 
-using ReplyCB = std::variant<ResultCB, StateResultCB>;
 
 // make these printable
 

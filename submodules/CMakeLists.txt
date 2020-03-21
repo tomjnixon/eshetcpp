@@ -3,3 +3,5 @@ target_include_directories(CLI11 INTERFACE ${PROJECT_SOURCE_DIR}/submodules/CLI1
 
 add_library(rapidjson INTERFACE)
 target_include_directories(rapidjson INTERFACE ${PROJECT_SOURCE_DIR}/submodules/rapidjson/include)
+
+add_subdirectory(actorpp)
