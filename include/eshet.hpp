@@ -142,9 +142,9 @@ public:
         }
       } break;
       case 2: {
-        auto reply = on_reply.read();
-        uint16_t id = std::get<0>(reply);
-        Result &result = std::get<1>(reply);
+        uint16_t id;
+        Result result;
+        std::tie(id, result) = on_reply.read();
 
         send_buf.start_msg(std::holds_alternative<Success>(result) ? 0x05
                                                                    : 0x06);

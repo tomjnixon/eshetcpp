@@ -35,6 +35,8 @@ struct Error : public HasMsgpackObject<Error>, public std::exception {
 
   Error(const Error &other)
       : HasMsgpackObject<Error>(msgpack::clone(other.value.get())) {}
+  Error(Error &&) = default;
+  Error& operator=(Error&&) = default;
 
   const char *what() const throw() {
     if (!error_str.size()) {
