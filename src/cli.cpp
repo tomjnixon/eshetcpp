@@ -65,6 +65,16 @@ msgpack::object_handle json_str_to_msgpack(std::string json) {
   return {obj, std::move(zone)};
 }
 
+int handle_result(const Success &r) {
+  std::cout << r.value.get() << std::endl;
+  return 0;
+}
+
+int handle_result(const Error &r) {
+  std::cout << r << std::endl;
+  return 1;
+}
+
 int main(int argc, char **argv) {
   CLI::App app{"eshet CLI"};
 
@@ -81,15 +91,13 @@ int main(int argc, char **argv) {
     for (auto &arg : args)
       args_o.emplace_back(json_str_to_msgpack(arg, *zone));
 
-    ESHETClient client(get_host_port());
-    client.wait_connected().get();
-    try {
-      auto res = client.action_call_pack_promise(path, args_o).get();
-      std::cout << res.value.get() << std::endl;
-    } catch (Error e) {
-      std::cerr << e << std::endl;
-      exit(1);
-    }
+    ActorThread<ESHETClient> client(get_host_port());
+    Channel<Result> call_result;
+    client.action_call_pack(path, call_result, args_o);
+    auto res = call_result.read();
+    client.exit();
+
+    return std::visit([](auto &r) { return handle_result(r); }, res);
   });
 
   app.require_subcommand(1);
