@@ -6,7 +6,7 @@
 namespace eshet {
 using namespace actorpp;
 
-struct Call {
+struct ActionCall {
   std::string path;
   Channel<Result> result_chan;
   msgpack::object_handle args;
@@ -15,8 +15,8 @@ struct Call {
 struct ActionRegister {
   std::string path;
   Channel<Result> result_chan;
-  Channel<std::tuple<uint16_t, msgpack::object_handle>> call_chan;
+  Channel<Call> call_chan;
 };
 
-using Command = std::variant<Call, ActionRegister>;
+using Command = std::variant<ActionCall, ActionRegister>;
 } // namespace eshet

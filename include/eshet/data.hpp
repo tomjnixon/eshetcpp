@@ -1,10 +1,12 @@
 #pragma once
 #define MSGPACK_VREFBUFFER_HPP
 #include "msgpack.hpp"
+#include "actorpp/actor.hpp"
 #include <functional>
 #include <variant>
 
 namespace eshet {
+  using namespace actorpp;
 template <typename Base> struct HasMsgpackObject {
   msgpack::object_handle value;
   HasMsgpackObject(msgpack::object_handle value) : value(std::move(value)) {}
@@ -60,6 +62,19 @@ using StateResult = std::variant<Known, Unknown, Error>;
 
 using AnyResult = std::variant<Success, Known, Unknown, Error>;
 
+struct Call : public HasMsgpackObject<Call> {
+  static constexpr const char *name = "Call";
+  uint16_t id;
+
+  Call(uint16_t id, msgpack::object_handle args, Channel<std::tuple<uint16_t, Result>> reply_chan)
+      : HasMsgpackObject<Call>(std::move(args)), id(id), reply_chan(reply_chan) {}
+
+  void reply(Result r) {
+    reply_chan.emplace(id, std::move(r));
+  }
+
+  Channel<std::tuple<uint16_t, Result>> reply_chan;
+};
 
 // make these printable
 

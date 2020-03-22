@@ -17,7 +17,8 @@ public:
   ESHETClient(const std::string &hostname, int port,
               std::optional<msgpack::object_handle> id = {})
       : hostname(hostname), port(port), id(std::move(id)), should_exit(*this),
-        on_message(*this), on_close(*this), on_command(*this), send_buf(128) {}
+        on_message(*this), on_close(*this), on_command(*this), on_reply(*this),
+        send_buf(128) {}
 
   ESHETClient(const std::pair<std::string, int> &hostport,
               std::optional<msgpack::object_handle> id = {})
@@ -28,12 +29,11 @@ public:
                         const T &args) {
     std::unique_ptr<msgpack::zone> z = std::make_unique<msgpack::zone>();
     msgpack::object_handle oh(msgpack::object(args, *z), std::move(z));
-    on_command.emplace(Call{path, result_chan, std::move(oh)});
+    on_command.emplace(ActionCall{path, result_chan, std::move(oh)});
   }
 
-  void action_register(
-      std::string path, Channel<Result> result_chan,
-      Channel<std::tuple<uint16_t, msgpack::object_handle>> call_chan) {
+  void action_register(std::string path, Channel<Result> result_chan,
+                       Channel<Call> call_chan) {
     on_command.emplace(ActionRegister{path, result_chan, call_chan});
   }
 
@@ -128,7 +128,7 @@ public:
       return;
 
     while (true) {
-      switch (wait(on_close, on_message, on_command, should_exit)) {
+      switch (wait(on_close, on_message, on_reply, on_command, should_exit)) {
       case 0: {
         on_close.read(); // XXX: do something with this
         return;
@@ -142,10 +142,23 @@ public:
         }
       } break;
       case 2: {
+        auto reply = on_reply.read();
+        uint16_t id = std::get<0>(reply);
+        Result &result = std::get<1>(reply);
+
+        send_buf.start_msg(std::holds_alternative<Success>(result) ? 0x05
+                                                                   : 0x06);
+        send_buf.write16(id);
+        send_buf.write_msgpack(
+            std::visit([](const auto &x) { return x.value.get(); }, result));
+        send_buf.write_size();
+        send_send_buf();
+      } break;
+      case 3: {
         Command c = on_command.read();
         std::visit(CommandVisitor(*this), std::move(c));
       } break;
-      case 3:
+      case 4:
         return;
       }
     }
@@ -217,7 +230,7 @@ public:
         // missing callback
         throw ProtocolError();
 
-      it->second.emplace(id, std::move(oh));
+      it->second.emplace(id, std::move(oh), on_reply);
     } break;
     }
   }
@@ -245,7 +258,7 @@ public:
   struct CommandVisitor {
     CommandVisitor(ESHETClient &c) : c(c) {}
 
-    void operator()(Call cmd) {
+    void operator()(ActionCall cmd) {
       c.send_buf.start_msg(0x11);
       uint16_t id = c.get_id();
       c.send_buf.write16(id);
@@ -298,10 +311,10 @@ private:
 
   using ReplyChannel = std::variant<Channel<Result>, Channel<StateResult>>;
   std::map<uint16_t, ReplyChannel> reply_channels;
-  std::map<std::string, Channel<std::tuple<uint16_t, msgpack::object_handle>>>
-      action_channels;
+  std::map<std::string, Channel<Call>> action_channels;
 
   Channel<Command> on_command;
+  Channel<std::tuple<uint16_t, Result>> on_reply;
 
   SendBuf send_buf;
   uint16_t next_id = 0;

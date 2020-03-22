@@ -8,7 +8,7 @@ TEST_CASE("make and call") {
   ActorThread<ESHETClient> client1("localhost", 11236);
 
   Actor self;
-  Channel<std::tuple<uint16_t, msgpack::object_handle>> action_chan(self);
+  Channel<Call> action_chan(self);
   Channel<Result> result_chan(self);
 
   // register on client1
@@ -21,18 +21,19 @@ TEST_CASE("make and call") {
   ActorThread<ESHETClient> client2("localhost", 11236);
   client2.action_call_pack(NS "/action", call_result, std::make_tuple(5));
 
+  // handle this call
   auto call = action_chan.read();
-  std::tuple<int> args;
-  // int x;
-  std::get<1>(call).get().convert(args);
+  auto args = call.as<std::tuple<int>>();
   REQUIRE(std::get<0>(args) == 5);
+  call.reply(Success(6));
 
+  // check result
+  auto result = std::get<Success>(call_result.read());
+  REQUIRE(result.as<int>() == 6);
 
-  /* auto res = client2.action_call_promise(NS "/action", 5).get(); */
-  /* REQUIRE(res.as<int>() == 6); */
-
-  /* auto res2 = client2.action_call_promise(NS "/actionz", 5); */
-  /* REQUIRE_THROWS_AS(res2.get().as<int>(), Error); */
+  // try calling a non-existent action
+  client2.action_call_pack(NS "/actionz", call_result, std::make_tuple(5));
+  REQUIRE(std::holds_alternative<Error>(call_result.read()));
 
   client1.exit();
   client2.exit();
