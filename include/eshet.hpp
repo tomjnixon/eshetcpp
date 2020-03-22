@@ -37,7 +37,7 @@ public:
     on_command.emplace(ActionRegister{path, result_chan, call_chan});
   }
 
-  bool connect_once() {
+  bool connect() {
     if (recv_thread)
       recv_thread->exit();
 
@@ -51,26 +51,6 @@ public:
     recv_thread = std::make_unique<actorpp::ActorThread<actorpp::RecvThread>>(
         sockfd, on_message, on_close);
     return true;
-  }
-
-  bool connect() {
-    // call connect_once until true, with exponential sleep, waiting on exit
-    std::chrono::seconds delay(1);
-    std::chrono::seconds max_delay(30);
-
-    while (true) {
-      if (connect_once())
-        return true;
-
-      // XXX: wait with timeout
-      if (should_exit.readable())
-        return false;
-      std::this_thread::sleep_for(delay);
-
-      delay *= 2;
-      if (delay > max_delay)
-        delay = max_delay;
-    }
   }
 
   // send and recieve hello messages, returns success
@@ -106,9 +86,36 @@ public:
   }
 
   void run() {
+    // repeatedly call loop, with exponential backoff from min_delay to
+    // max_delay, resetting back to min_delay if loop runs for at least
+    // reset_thresh
+    const std::chrono::seconds min_delay(1);
+    const std::chrono::seconds max_delay(30);
+    const std::chrono::seconds reset_thresh(10);
+
+    std::chrono::seconds delay(min_delay);
+
     while (true) {
-      // exponential backoff here depending on how long loop has ran for
+      auto start = std::chrono::high_resolution_clock::now();
       loop();
+      auto end = std::chrono::high_resolution_clock::now();
+
+      // XXX: wait with timeout
+      if (should_exit.readable() && should_exit.read()) {
+        if (recv_thread)
+          recv_thread->exit();
+        // XXX: close connection
+        return;
+      }
+
+      if ((end - start) >= reset_thresh)
+        delay = min_delay;
+
+      std::this_thread::sleep_for(delay);
+
+      delay *= 2;
+      if (delay > max_delay)
+        delay = max_delay;
 
       if (should_exit.readable() && should_exit.read()) {
         if (recv_thread)
