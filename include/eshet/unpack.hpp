@@ -9,6 +9,7 @@ namespace detail {
 // accept a stream of data in arbitrary chunks, and produce complete messages
 class Unpacker {
   std::vector<uint8_t> buffer;
+
 public:
   void push(std::vector<uint8_t> buf) {
     for (uint8_t chr : buf)
@@ -19,7 +20,8 @@ public:
     if (buffer.size() < 3)
       return std::nullopt;
 
-    uint8_t magic; uint16_t length;
+    uint8_t magic;
+    uint16_t length;
     std::tie(magic, length) = parse(buffer.data(), 3, read8, read16);
     if (magic != 0x47)
       throw ProtocolError();

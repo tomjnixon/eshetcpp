@@ -51,7 +51,7 @@ auto parse(const uint8_t *data, size_t size, CB cb, CBs... cbs) {
 // hold a buffer for message construction, with operations for writing various
 // types of data
 struct SendBuf {
-  SendBuf(size_t size) :sbuf(size) {}
+  SendBuf(size_t size) : sbuf(size) {}
 
   void start_msg(uint8_t type) {
     sbuf.clear();
