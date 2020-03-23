@@ -37,6 +37,8 @@ public:
     on_command.emplace(ActionRegister{path, result_chan, call_chan});
   }
 
+  void test_disconnect() { on_command.emplace(Disconnect{}); }
+
   bool connect() {
     if (recv_thread)
       recv_thread->exit();
@@ -83,6 +85,75 @@ public:
         return false;
       }
     }
+  }
+
+  // wait for a reply message, and check that it has the expected id and is not
+  // an error
+  bool check_success(uint16_t id, const std::string &path) {
+    while (true) {
+      switch (wait(on_close, on_message, should_exit)) {
+      case 0:
+        on_close.read();
+        return false;
+      case 1: {
+        unpacker.push(on_message.read());
+
+        std::optional<std::vector<uint8_t>> message;
+        if ((message = unpacker.read())) {
+          bool rv = check_success_message(*message, id, path);
+
+          // no reason for the server to have sent us any more messages here
+          assert(!unpacker.read());
+          return rv;
+        }
+      } break;
+      case 2:
+        return false;
+      }
+    }
+  }
+
+  // check that a message has the expected id and is not an error
+  bool check_success_message(std::vector<uint8_t> &msg, uint16_t expected_id,
+      const std::string &path) {
+    if (msg.size() < 1)
+      throw ProtocolError();
+
+    switch (msg[0]) {
+    case 0x05:
+    case 0x06: {
+      // {reply, Id, {ok, Msg}} or {reply, Id, {error, Msg}}
+      uint16_t id;
+      msgpack::object_handle oh;
+      std::tie(id, oh) = parse(&msg[1], msg.size() - 1, read16, read_msgpack);
+
+      if (id != expected_id)
+        throw ProtocolError(); // wrong id
+
+      if (msg[0] == 0x05)
+        return true;
+      else {
+        std::stringstream error;
+        error << "error while adding " << path << ": " << oh.get();
+        log.error(error.str());
+        return false;
+      }
+    } break;
+    default:
+      throw ProtocolError(); // shouldn't get any other type
+    }
+  }
+
+  // send registration commands after reconnecting
+  bool reregister() {
+    for (auto &action : action_channels) {
+      const std::string &path = action.first;
+      uint16_t id = get_id();
+      send_action_register(id, path);
+      if (!check_success(id, path))
+        return false;
+    }
+    return true;
   }
 
   void run() {
@@ -132,6 +203,8 @@ public:
     if (!connect())
       return;
     if (!do_hello())
+      return;
+    if (!reregister())
       return;
 
     while (true) {
@@ -262,30 +335,43 @@ public:
       throw ProtocolError();
   }
 
+  void send_action_register(uint16_t id, const std::string &path) {
+    send_register(0x10, id, path);
+  }
+
+  void send_register(uint8_t message, uint16_t id, const std::string &path) {
+    send_buf.start_msg(message);
+    send_buf.write16(id);
+    send_buf.write_string(path);
+    send_buf.write_size();
+    send_send_buf();
+  }
+
   struct CommandVisitor {
     CommandVisitor(ESHETClient &c) : c(c) {}
 
     void operator()(ActionCall cmd) {
-      c.send_buf.start_msg(0x11);
       uint16_t id = c.get_id();
+
+      c.send_buf.start_msg(0x11);
       c.send_buf.write16(id);
       c.send_buf.write_string(cmd.path);
       c.send_buf.write_msgpack(*cmd.args);
-      c.reply_channels.emplace(id, std::move(cmd.result_chan));
       c.send_buf.write_size();
       c.send_send_buf();
+
+      c.reply_channels.emplace(id, std::move(cmd.result_chan));
     }
 
     void operator()(ActionRegister cmd) {
-      c.send_buf.start_msg(0x10);
       uint16_t id = c.get_id();
-      c.send_buf.write16(id);
-      c.send_buf.write_string(cmd.path);
+      c.send_action_register(id, cmd.path);
+
       c.reply_channels.emplace(id, std::move(cmd.result_chan));
-      c.action_channels.emplace(cmd.path, std::move(cmd.call_chan));
-      c.send_buf.write_size();
-      c.send_send_buf();
+      c.action_channels.emplace(std::move(cmd.path), std::move(cmd.call_chan));
     }
+
+    void operator()(Disconnect d) { c.on_close.push(CloseReason::Error); }
 
     ESHETClient &c;
   };

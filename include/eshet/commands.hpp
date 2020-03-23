@@ -18,5 +18,7 @@ struct ActionRegister {
   Channel<Call> call_chan;
 };
 
-using Command = std::variant<ActionCall, ActionRegister>;
+struct Disconnect {};
+
+using Command = std::variant<ActionCall, ActionRegister, Disconnect>;
 } // namespace eshet
