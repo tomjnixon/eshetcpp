@@ -1,17 +1,23 @@
 #pragma once
 #include "data.hpp"
 #include <future>
+#include <type_traits>
 
 namespace eshet {
 namespace detail {
 
 template <typename In, typename Cb>
-auto do_convert_variant(In in, Cb cb) -> decltype(cb(std::move(in)), bool()) {
+std::enable_if_t<std::is_invocable_v<Cb, In>, bool> do_convert_variant(In in,
+                                                                       Cb cb) {
   cb(std::move(in));
   return true;
 }
 
-bool do_convert_variant(...) { return false; }
+template <typename In, typename Cb>
+std::enable_if_t<!std::is_invocable_v<Cb, In>, bool> do_convert_variant(In in,
+                                                                        Cb cb) {
+  return false;
+}
 
 // Helper to convert between variants holding the same type.
 // If `in` holds something that `cb` can be called with, it will be, and the
