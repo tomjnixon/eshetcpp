@@ -55,7 +55,7 @@ public:
     return true;
   }
 
-  // send and recieve hello messages, returns success
+  // send and receive hello messages, returns success
   bool do_hello() {
     send_buf.start_msg(id ? 0x02 : 0x01);
     send_buf.write8(1);
