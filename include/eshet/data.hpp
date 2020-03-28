@@ -21,6 +21,11 @@ template <typename Base> struct HasMsgpackObject {
     value.get().convert(v);
     return v;
   }
+
+  template <typename T>
+  void convert(T v) {
+    value.get().convert(v);
+  }
 };
 
 struct Success : public HasMsgpackObject<Success> {
