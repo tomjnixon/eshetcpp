@@ -12,17 +12,34 @@ namespace eshet {
 using namespace actorpp;
 using namespace detail;
 
+struct TimeoutConfig {
+  // send a ping if we haven't sent anything for this long
+  std::chrono::seconds idle_ping{15};
+  // tell the server to time out if it hasn't received a message for this long;
+  // must be more than idle_ping
+  std::chrono::seconds server_timeout{30};
+  // how long to wait for a ping before assuming the connection is dead
+  std::chrono::seconds ping_timeout{5};
+};
+
 class ESHETClient : public Actor {
+  using clock = std::chrono::steady_clock;
+  using time_point = std::chrono::time_point<clock>;
+
 public:
   ESHETClient(const std::string &hostname, int port,
-              std::optional<msgpack::object_handle> id = {})
-      : hostname(hostname), port(port), id(std::move(id)), should_exit(*this),
-        on_message(*this), on_close(*this), on_command(*this), on_reply(*this),
-        send_buf(128) {}
+              std::optional<msgpack::object_handle> id = {},
+              TimeoutConfig timeout_config = {})
+      : hostname(hostname), port(port), id(std::move(id)),
+        timeout_config(std::move(timeout_config)), ping_result(*this),
+        should_exit(*this), on_message(*this), on_close(*this),
+        on_command(*this), on_reply(*this), send_buf(128) {}
 
   ESHETClient(const std::pair<std::string, int> &hostport,
-              std::optional<msgpack::object_handle> id = {})
-      : ESHETClient(hostport.first, hostport.second, std::move(id)) {}
+              std::optional<msgpack::object_handle> id = {},
+              TimeoutConfig timeout_config = {})
+      : ESHETClient(hostport.first, hostport.second, std::move(id),
+                    std::move(timeout_config)) {}
 
   template <typename T>
   void action_call_pack(std::string path, Channel<Result> result_chan,
@@ -59,6 +76,7 @@ public:
   bool do_hello() {
     send_buf.start_msg(id ? 0x02 : 0x01);
     send_buf.write8(1);
+    send_buf.write16(timeout_config.server_timeout.count());
     if (id)
       send_buf.write_msgpack(id->get());
     send_buf.write_size();
@@ -208,12 +226,30 @@ public:
       return;
 
     while (true) {
-      switch (wait(on_close, on_message, on_reply, on_command, should_exit)) {
+      time_point timeout =
+          ping_timeout ? std::min(*ping_timeout, idle_timeout) : idle_timeout;
+
+      switch (wait_until(timeout, ping_result, on_close, on_message, on_reply,
+                         on_command, should_exit)) {
+      case -1: {
+        if (timeout == idle_timeout) {
+          std::visit(CommandVisitor(*this), Command{Ping{ping_result}});
+          ping_timeout = clock::now() + timeout_config.ping_timeout;
+        } else { // ping_timeout
+          return;
+        }
+      } break;
       case 0: {
+        Result r = ping_result.read();
+        if (!std::holds_alternative<Success>(r))
+          throw ProtocolError(); // bad response to ping
+        ping_timeout.reset();
+      } break;
+      case 1: {
         on_close.read(); // XXX: do something with this
         return;
       } break;
-      case 1: {
+      case 2: {
         unpacker.push(on_message.read());
 
         std::optional<std::vector<uint8_t>> message;
@@ -221,7 +257,7 @@ public:
           handle_message(*message);
         }
       } break;
-      case 2: {
+      case 3: {
         uint16_t id;
         Result result;
         std::tie(id, result) = on_reply.read();
@@ -234,11 +270,11 @@ public:
         send_buf.write_size();
         send_send_buf();
       } break;
-      case 3: {
+      case 4: {
         Command c = on_command.read();
         std::visit(CommandVisitor(*this), std::move(c));
       } break;
-      case 4:
+      case 5:
         return;
       }
     }
@@ -371,6 +407,17 @@ public:
       c.action_channels.emplace(std::move(cmd.path), std::move(cmd.call_chan));
     }
 
+    void operator()(Ping cmd) {
+      uint16_t id = c.get_id();
+
+      c.send_buf.start_msg(0x09);
+      c.send_buf.write16(id);
+      c.send_buf.write_size();
+      c.send_send_buf();
+
+      c.reply_channels.emplace(id, std::move(cmd.result_chan));
+    }
+
     void operator()(Disconnect d) { c.on_close.push(CloseReason::Error); }
 
     ESHETClient &c;
@@ -379,6 +426,7 @@ public:
   uint16_t get_id() { return next_id++; }
 
   void send_send_buf() {
+    idle_timeout = clock::now() + timeout_config.idle_ping;
     if (send(sockfd, send_buf.sbuf.data(), send_buf.sbuf.size(), MSG_NOSIGNAL) <
         0)
       throw Disconnected{};
@@ -390,6 +438,11 @@ private:
   std::string hostname;
   int port;
   std::optional<msgpack::object_handle> id;
+  TimeoutConfig timeout_config;
+
+  std::optional<time_point> ping_timeout;
+  time_point idle_timeout;
+  Channel<Result> ping_result;
 
   Logger log;
 
