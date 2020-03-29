@@ -133,7 +133,7 @@ public:
 
   // check that a message has the expected id and is not an error
   bool check_success_message(std::vector<uint8_t> &msg, uint16_t expected_id,
-      const std::string &path) {
+                             const std::string &path) {
     if (msg.size() < 1)
       throw ProtocolError();
 
