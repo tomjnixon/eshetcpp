@@ -185,9 +185,9 @@ public:
     std::chrono::seconds delay(min_delay);
 
     while (true) {
-      auto start = std::chrono::high_resolution_clock::now();
+      auto start = clock::now();
       loop();
-      auto end = std::chrono::high_resolution_clock::now();
+      auto end = clock::now();
 
       // XXX: wait with timeout
       if (should_exit.readable() && should_exit.read()) {
