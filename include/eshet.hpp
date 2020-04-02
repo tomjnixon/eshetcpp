@@ -189,29 +189,19 @@ public:
       loop();
       auto end = clock::now();
 
-      // XXX: wait with timeout
-      if (should_exit.readable() && should_exit.read()) {
+      if ((end - start) >= reset_thresh)
+        delay = min_delay;
+
+      if (wait_for(delay, should_exit) == 0) {
         if (recv_thread)
           recv_thread->exit();
         // XXX: close connection
         return;
       }
-
-      if ((end - start) >= reset_thresh)
-        delay = min_delay;
-
-      std::this_thread::sleep_for(delay);
 
       delay *= 2;
       if (delay > max_delay)
         delay = max_delay;
-
-      if (should_exit.readable() && should_exit.read()) {
-        if (recv_thread)
-          recv_thread->exit();
-        // XXX: close connection
-        return;
-      }
     }
   }
 
