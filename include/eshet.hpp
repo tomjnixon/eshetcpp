@@ -56,9 +56,18 @@ public:
 
   void test_disconnect() { on_command.emplace(Disconnect{}); }
 
+  void cleanup_connection() {
+    if (recv_thread) {
+      recv_thread.reset();
+    }
+    if (sockfd != -1) {
+      assert(close(sockfd) == 0);
+      sockfd = -1;
+    }
+  }
+
   bool connect() {
-    if (recv_thread)
-      recv_thread->exit();
+    cleanup_connection();
 
     try {
       sockfd = actorpp::connect(hostname, port);
@@ -193,9 +202,7 @@ public:
         delay = min_delay;
 
       if (wait_for(delay, should_exit) == 0) {
-        if (recv_thread)
-          recv_thread->exit();
-        // XXX: close connection
+        cleanup_connection();
         return;
       }
 
@@ -438,7 +445,7 @@ private:
 
   Channel<bool> should_exit;
 
-  int sockfd;
+  int sockfd = -1;
   Channel<std::vector<uint8_t>> on_message;
   Channel<CloseReason> on_close;
   std::unique_ptr<ActorThread<RecvThread>> recv_thread;
