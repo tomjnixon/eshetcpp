@@ -67,8 +67,4 @@ TEST_CASE("make and call") {
   std::this_thread::sleep_for(std::chrono::seconds(2));
 
   do_call();
-
-  test_action.exit();
-  client1.exit();
-  client2.exit();
 }
