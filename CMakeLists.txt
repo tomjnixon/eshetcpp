@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.9)
 
+if(DEFINED PROJECT_NAME)
+  set(SUBPROJECT ON)
+endif()
+
 project(eshetcpp VERSION 0.0.1 LANGUAGES CXX)
 
 add_subdirectory(submodules)
@@ -18,6 +22,9 @@ target_compile_features(eshetcpp INTERFACE cxx_std_17)
 target_link_libraries (eshetcpp INTERFACE Threads::Threads)
 target_link_libraries (eshetcpp INTERFACE actorpp)
 
-include(CTest)
-add_subdirectory(test)
-add_subdirectory(src)
+if(NOT SUBPROJECT)
+    include(CTest)
+    add_subdirectory(test)
+
+    add_subdirectory(src)
+endif()
