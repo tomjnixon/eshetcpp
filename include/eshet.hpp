@@ -65,6 +65,10 @@ public:
       sockfd = -1;
     }
 
+    ping_result.clear();
+    on_close.clear();
+    on_message.clear();
+
     for (auto &pair : reply_channels)
       std::visit([](auto &c) { c.push(Error("disconnected")); }, pair.second);
     reply_channels.clear();
