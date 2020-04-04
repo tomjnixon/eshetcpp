@@ -26,6 +26,13 @@ template <typename Base> struct HasMsgpackObject {
   void convert(T v) {
     value.get().convert(v);
   }
+
+  bool operator==(const HasMsgpackObject<Base> &other) const {
+    return value.get() == other.value.get();
+  }
+  bool operator!=(const HasMsgpackObject<Base> &other) const {
+    return !(*this == other);
+  }
 };
 
 struct Success : public HasMsgpackObject<Success> {
