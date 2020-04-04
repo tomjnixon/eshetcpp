@@ -122,60 +122,44 @@ public:
     }
   }
 
-  // wait for a reply message, and check that it has the expected id and is not
-  // an error
+  struct CheckResultSuccess {
+    ESHETClient &c;
+    const std::string &path;
+
+    bool operator()(const Success &s) { return true; }
+    bool operator()(const Error &e) {
+      std::stringstream error_msg;
+      error_msg << "error while adding " << path << ": " << e.value.get();
+      c.log.error(error_msg.str());
+      return false;
+    }
+  };
+
+  // wait for a reply message, and check that it is not an error, while
+  // processing other messages normally
   bool check_success(uint16_t id, const std::string &path) {
+    Channel<Result> result_chan(*this);
+    reply_channels.emplace(id, result_chan);
+
     while (true) {
-      switch (wait(on_close, on_message, should_exit)) {
-      case 0:
+      switch (wait(on_close, on_message, result_chan, should_exit)) {
+      case 0: // on_close
         on_close.read();
         return false;
-      case 1: {
+      case 1: { // on_message
         unpacker.push(on_message.read());
 
         std::optional<std::vector<uint8_t>> message;
-        if ((message = unpacker.read())) {
-          bool rv = check_success_message(*message, id, path);
-
-          // no reason for the server to have sent us any more messages here
-          assert(!unpacker.read());
-          return rv;
+        while ((message = unpacker.read())) {
+          handle_message(*message);
         }
       } break;
-      case 2:
+      case 2: { // result_chan
+        return std::visit(CheckResultSuccess{*this, path}, result_chan.read());
+      } break;
+      case 3:
         return false;
       }
-    }
-  }
-
-  // check that a message has the expected id and is not an error
-  bool check_success_message(std::vector<uint8_t> &msg, uint16_t expected_id,
-                             const std::string &path) {
-    if (msg.size() < 1)
-      throw ProtocolError();
-
-    switch (msg[0]) {
-    case 0x05:
-    case 0x06: {
-      // {reply, Id, {ok, Msg}} or {reply, Id, {error, Msg}}
-      uint16_t id;
-      msgpack::object_handle oh;
-      std::tie(id, oh) = parse(&msg[1], msg.size() - 1, read16, read_msgpack);
-
-      if (id != expected_id)
-        throw ProtocolError(); // wrong id
-
-      if (msg[0] == 0x05)
-        return true;
-      else {
-        std::stringstream error;
-        error << "error while adding " << path << ": " << oh.get();
-        log.error(error.str());
-        return false;
-      }
-    } break;
-    default:
-      throw ProtocolError(); // shouldn't get any other type
     }
   }
 
@@ -220,17 +204,16 @@ public:
     }
   }
 
-  // connect, say hello, then loop recieving messages; returns if there was an
-  // error, or if we should exit
+  // connect, say hello, then loop recieving messages; returns if there was
+  // an error, or if we should exit
   void loop() {
     if (!connect())
       return;
+    connection_id++;
     if (!do_hello())
       return;
     if (!reregister())
       return;
-
-    connection_id++;
 
     while (true) {
       time_point timeout =
