@@ -68,3 +68,19 @@ TEST_CASE("make and call") {
 
   do_call();
 }
+
+TEST_CASE("disconnected reply") {
+  ActorThread<ESHETClient> client1("localhost", 11236);
+  ActorThread<ESHETClient> client2("localhost", 11236);
+
+  Channel<Result> result_chan;
+  Channel<Call> action_chan;
+  client1.action_register(NS "/action", result_chan, action_chan);
+  REQUIRE(std::holds_alternative<Success>(result_chan.read()));
+
+  Channel<Result> call_result;
+  client2.action_call_pack(NS "/action", call_result, std::make_tuple(5));
+  client2.test_disconnect();
+
+  REQUIRE(call_result.read() == Result(Error("disconnected")));
+}

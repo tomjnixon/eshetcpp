@@ -64,6 +64,10 @@ public:
       assert(close(sockfd) == 0);
       sockfd = -1;
     }
+
+    for (auto &pair : reply_channels)
+      std::visit([](auto &c) { c.push(Error("disconnected")); }, pair.second);
+    reply_channels.clear();
   }
 
   bool connect() {
@@ -386,33 +390,34 @@ public:
     void operator()(ActionCall cmd) {
       uint16_t id = c.get_id();
 
+      c.reply_channels.emplace(id, std::move(cmd.result_chan));
+
       c.send_buf.start_msg(0x11);
       c.send_buf.write16(id);
       c.send_buf.write_string(cmd.path);
       c.send_buf.write_msgpack(*cmd.args);
       c.send_buf.write_size();
       c.send_send_buf();
-
-      c.reply_channels.emplace(id, std::move(cmd.result_chan));
     }
 
     void operator()(ActionRegister cmd) {
       uint16_t id = c.get_id();
-      c.send_action_register(id, cmd.path);
-
       c.reply_channels.emplace(id, std::move(cmd.result_chan));
-      c.action_channels.emplace(std::move(cmd.path), std::move(cmd.call_chan));
+      auto it = c.action_channels
+                    .emplace(std::move(cmd.path), std::move(cmd.call_chan))
+                    .first;
+
+      c.send_action_register(id, it->first);
     }
 
     void operator()(Ping cmd) {
       uint16_t id = c.get_id();
+      c.reply_channels.emplace(id, std::move(cmd.result_chan));
 
       c.send_buf.start_msg(0x09);
       c.send_buf.write16(id);
       c.send_buf.write_size();
       c.send_send_buf();
-
-      c.reply_channels.emplace(id, std::move(cmd.result_chan));
     }
 
     void operator()(Disconnect d) { c.on_close.push(CloseReason::Error); }
