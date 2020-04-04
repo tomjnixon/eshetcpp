@@ -230,6 +230,8 @@ public:
     if (!reregister())
       return;
 
+    connection_id++;
+
     while (true) {
       time_point timeout =
           ping_timeout ? std::min(*ping_timeout, idle_timeout) : idle_timeout;
@@ -263,17 +265,20 @@ public:
         }
       } break;
       case 3: {
+        uint16_t call_connection_id;
         uint16_t id;
         Result result;
-        std::tie(id, result) = on_reply.read();
+        std::tie(call_connection_id, id, result) = on_reply.read();
 
-        send_buf.start_msg(std::holds_alternative<Success>(result) ? 0x05
-                                                                   : 0x06);
-        send_buf.write16(id);
-        send_buf.write_msgpack(
-            std::visit([](const auto &x) { return x.value.get(); }, result));
-        send_buf.write_size();
-        send_send_buf();
+        if (call_connection_id == connection_id) {
+          send_buf.start_msg(std::holds_alternative<Success>(result) ? 0x05
+                                                                     : 0x06);
+          send_buf.write16(id);
+          send_buf.write_msgpack(
+              std::visit([](const auto &x) { return x.value.get(); }, result));
+          send_buf.write_size();
+          send_send_buf();
+        }
       } break;
       case 4: {
         Command c = on_command.read();
@@ -351,7 +356,7 @@ public:
         // missing callback
         throw ProtocolError();
 
-      it->second.emplace(id, std::move(oh), on_reply);
+      it->second.emplace(connection_id, id, std::move(oh), on_reply);
     } break;
     }
   }
@@ -458,6 +463,7 @@ private:
   Channel<std::vector<uint8_t>> on_message;
   Channel<CloseReason> on_close;
   std::unique_ptr<ActorThread<RecvThread>> recv_thread;
+  uint16_t connection_id = 0;
 
   Unpacker unpacker;
 
@@ -466,7 +472,7 @@ private:
   std::map<std::string, Channel<Call>> action_channels;
 
   Channel<Command> on_command;
-  Channel<std::tuple<uint16_t, Result>> on_reply;
+  Channel<std::tuple<uint16_t, uint16_t, Result>> on_reply;
 
   SendBuf send_buf;
   uint16_t next_id = 0;

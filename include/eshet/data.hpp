@@ -78,16 +78,17 @@ using AnyResult = std::variant<Success, Known, Unknown, Error>;
 
 struct Call : public HasMsgpackObject<Call> {
   static constexpr const char *name = "Call";
+  uint16_t connection_id;
   uint16_t id;
 
-  Call(uint16_t id, msgpack::object_handle args,
-       Channel<std::tuple<uint16_t, Result>> reply_chan)
-      : HasMsgpackObject<Call>(std::move(args)), id(id),
-        reply_chan(reply_chan) {}
+  Call(uint16_t connection_id, uint16_t id, msgpack::object_handle args,
+       Channel<std::tuple<uint16_t, uint16_t, Result>> reply_chan)
+      : HasMsgpackObject<Call>(std::move(args)), connection_id(connection_id),
+        id(id), reply_chan(reply_chan) {}
 
-  void reply(Result r) { reply_chan.emplace(id, std::move(r)); }
+  void reply(Result r) { reply_chan.emplace(connection_id, id, std::move(r)); }
 
-  Channel<std::tuple<uint16_t, Result>> reply_chan;
+  Channel<std::tuple<uint16_t, uint16_t, Result>> reply_chan;
 };
 
 // make these printable
