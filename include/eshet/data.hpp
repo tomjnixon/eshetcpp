@@ -22,10 +22,7 @@ template <typename Base> struct HasMsgpackObject {
     return v;
   }
 
-  template <typename T>
-  void convert(T v) {
-    value.get().convert(v);
-  }
+  template <typename T> void convert(T v) { value.get().convert(v); }
 
   bool operator==(const HasMsgpackObject<Base> &other) const {
     return value.get() == other.value.get();
