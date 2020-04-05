@@ -1,5 +1,4 @@
 #pragma once
-#define MSGPACK_VREFBUFFER_HPP
 #include "actorpp/actor.hpp"
 #include "msgpack.hpp"
 #include <functional>
