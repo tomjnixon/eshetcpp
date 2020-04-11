@@ -66,7 +66,10 @@ struct Known : public HasMsgpackObject<Known> {
   static constexpr const char *name = "Known";
 };
 
-struct Unknown {};
+struct Unknown {
+  bool operator==(const Unknown &other) const { return true; }
+  bool operator!=(const Unknown &other) const { return !(*this == other); }
+};
 
 using StateResult = std::variant<Known, Unknown, Error>;
 
