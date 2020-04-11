@@ -190,9 +190,9 @@ public:
       return false;
   }
 
-  template <typename Resultt>
-  std::optional<Resultt> wait_for_reply(uint16_t id) {
-    Channel<Resultt> result_chan(*this);
+  template <typename ResultT>
+  std::optional<ResultT> wait_for_reply(uint16_t id) {
+    Channel<ResultT> result_chan(*this);
     reply_channels.emplace(id, result_chan);
 
     while (true) {
