@@ -94,7 +94,7 @@ public:
       std::visit([](auto &c) { c.push(Error("disconnected")); }, pair.second);
     reply_channels.clear();
 
-    for (auto &state : state_channels)
+    for (auto &state : observed_states)
       state.second.emplace(Unknown{});
   }
 
@@ -227,7 +227,7 @@ public:
         return false;
     }
 
-    for (auto &state : states) {
+    for (auto &state : registered_states) {
       uint16_t id = get_id();
       const std::string &path = state.first;
       send_state_register(id, path);
@@ -240,7 +240,7 @@ public:
         return false;
     }
 
-    for (auto &state : state_channels) {
+    for (auto &state : observed_states) {
       uint16_t id = get_id();
       const std::string &path = state.first;
       send_state_observe(id, path);
@@ -428,8 +428,8 @@ public:
       std::tie(path, oh) =
           parse(&msg[1], msg.size() - 1, read_string, read_msgpack);
 
-      auto it = state_channels.find(path);
-      if (it == state_channels.end())
+      auto it = observed_states.find(path);
+      if (it == observed_states.end())
         // unknown state
         throw ProtocolError();
 
@@ -440,8 +440,8 @@ public:
       std::string path;
       std::tie(path) = parse(&msg[1], msg.size() - 1, read_string);
 
-      auto it = state_channels.find(path);
-      if (it == state_channels.end())
+      auto it = observed_states.find(path);
+      if (it == observed_states.end())
         // unknown state
         throw ProtocolError();
 
@@ -543,7 +543,8 @@ public:
     void operator()(StateRegister cmd) {
       uint16_t id = c.get_id();
       c.reply_channels.emplace(id, std::move(cmd.result_chan));
-      auto it = c.states.emplace(std::move(cmd.path), Unknown{}).first;
+      auto it =
+          c.registered_states.emplace(std::move(cmd.path), Unknown{}).first;
 
       c.send_state_register(id, it->first);
     }
@@ -551,7 +552,7 @@ public:
     void operator()(StateChanged cmd) {
       uint16_t id = c.get_id();
       c.reply_channels.emplace(id, std::move(cmd.result_chan));
-      c.states[cmd.path] = std::move(cmd.value);
+      c.registered_states[cmd.path] = std::move(cmd.value);
 
       c.send_state_changed(id, cmd.path, cmd.value);
     }
@@ -559,7 +560,7 @@ public:
     void operator()(StateObserve cmd) {
       uint16_t id = c.get_id();
       c.reply_channels.emplace(id, std::move(cmd.result_chan));
-      auto it = c.state_channels
+      auto it = c.observed_states
                     .emplace(std::move(cmd.path), std::move(cmd.changed_chan))
                     .first;
 
@@ -618,8 +619,8 @@ private:
   std::map<uint16_t, ReplyChannel> reply_channels;
   std::map<std::string, Channel<Call>> action_channels;
 
-  std::map<std::string, StateUpdate> states;
-  std::map<std::string, Channel<StateUpdate>> state_channels;
+  std::map<std::string, StateUpdate> registered_states;
+  std::map<std::string, Channel<StateUpdate>> observed_states;
 
   Channel<Command> on_command;
   Channel<std::tuple<uint16_t, uint16_t, Result>> on_reply;
