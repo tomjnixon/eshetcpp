@@ -72,6 +72,7 @@ struct Unknown {
 };
 
 using StateResult = std::variant<Known, Unknown, Error>;
+using StateUpdate = std::variant<Known, Unknown>;
 
 using AnyResult = std::variant<Success, Known, Unknown, Error>;
 

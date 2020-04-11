@@ -54,6 +54,27 @@ public:
     on_command.emplace(ActionRegister{path, result_chan, call_chan});
   }
 
+  void state_register(std::string path, Channel<Result> result_chan) {
+    on_command.emplace(StateRegister{path, result_chan});
+  }
+
+  template <typename T>
+  void state_changed(std::string path, const T &value,
+                     Channel<Result> result_chan) {
+    std::unique_ptr<msgpack::zone> z = std::make_unique<msgpack::zone>();
+    msgpack::object_handle oh(msgpack::object(value, *z), std::move(z));
+    on_command.emplace(StateChanged{path, result_chan, Known{std::move(oh)}});
+  }
+
+  void state_unknown(std::string path, Channel<Result> result_chan) {
+    on_command.emplace(StateChanged{path, result_chan, Unknown{}});
+  }
+
+  void state_observe(std::string path, Channel<StateResult> result_chan,
+                     Channel<StateUpdate> changed_chan) {
+    on_command.emplace(StateObserve{path, result_chan, changed_chan});
+  }
+
   void test_disconnect() { on_command.emplace(Disconnect{}); }
 
   void cleanup_connection() {
@@ -72,6 +93,9 @@ public:
     for (auto &pair : reply_channels)
       std::visit([](auto &c) { c.push(Error("disconnected")); }, pair.second);
     reply_channels.clear();
+
+    for (auto &state : state_channels)
+      state.second.emplace(Unknown{});
   }
 
   bool connect() {
@@ -135,17 +159,47 @@ public:
     }
   };
 
+  struct HandleStateReply {
+    ESHETClient &c;
+    const std::string &path;
+    Channel<StateUpdate> &channel;
+
+    bool operator()(Known s) {
+      channel.push(std::move(s));
+      return true;
+    }
+    bool operator()(Unknown s) {
+      channel.push(std::move(s));
+      return true;
+    }
+    bool operator()(const Error &e) {
+      std::stringstream error_msg;
+      error_msg << "error while adding " << path << ": " << e.value.get();
+      c.log.error(error_msg.str());
+      return false;
+    }
+  };
+
   // wait for a reply message, and check that it is not an error, while
   // processing other messages normally
   bool check_success(uint16_t id, const std::string &path) {
-    Channel<Result> result_chan(*this);
+    auto reply = wait_for_reply<Result>(id);
+    if (reply)
+      return std::visit(CheckResultSuccess{*this, path}, *reply);
+    else
+      return false;
+  }
+
+  template <typename Resultt>
+  std::optional<Resultt> wait_for_reply(uint16_t id) {
+    Channel<Resultt> result_chan(*this);
     reply_channels.emplace(id, result_chan);
 
     while (true) {
       switch (wait(on_close, on_message, result_chan, should_exit)) {
       case 0: // on_close
         on_close.read();
-        return false;
+        return {};
       case 1: { // on_message
         unpacker.push(on_message.read());
 
@@ -155,10 +209,10 @@ public:
         }
       } break;
       case 2: { // result_chan
-        return std::visit(CheckResultSuccess{*this, path}, result_chan.read());
+        return result_chan.read();
       } break;
       case 3:
-        return false;
+        return {};
       }
     }
   }
@@ -172,6 +226,32 @@ public:
       if (!check_success(id, path))
         return false;
     }
+
+    for (auto &state : states) {
+      uint16_t id = get_id();
+      const std::string &path = state.first;
+      send_state_register(id, path);
+      if (!check_success(id, path))
+        return false;
+
+      id = get_id();
+      send_state_changed(id, path, state.second);
+      if (!check_success(id, path))
+        return false;
+    }
+
+    for (auto &state : state_channels) {
+      uint16_t id = get_id();
+      const std::string &path = state.first;
+      send_state_observe(id, path);
+      auto reply = wait_for_reply<StateResult>(id);
+      if (!reply)
+        return false;
+      if (!std::visit(HandleStateReply{*this, path, state.second},
+                      std::move(*reply)))
+        return false;
+    }
+
     return true;
   }
 
@@ -341,6 +421,32 @@ public:
 
       it->second.emplace(connection_id, id, std::move(oh), on_reply);
     } break;
+    case 0x44: {
+      // {state_changed, Path, {known, State}}
+      std::string path;
+      msgpack::object_handle oh;
+      std::tie(path, oh) =
+          parse(&msg[1], msg.size() - 1, read_string, read_msgpack);
+
+      auto it = state_channels.find(path);
+      if (it == state_channels.end())
+        // unknown state
+        throw ProtocolError();
+
+      it->second.emplace(Known(std::move(oh)));
+    } break;
+    case 0x45: {
+      // {state_changed, Path, unknown}
+      std::string path;
+      std::tie(path) = parse(&msg[1], msg.size() - 1, read_string);
+
+      auto it = state_channels.find(path);
+      if (it == state_channels.end())
+        // unknown state
+        throw ProtocolError();
+
+      it->second.emplace(Unknown());
+    } break;
     }
   }
 
@@ -366,6 +472,38 @@ public:
 
   void send_action_register(uint16_t id, const std::string &path) {
     send_register(0x10, id, path);
+  }
+
+  void send_state_register(uint16_t id, const std::string &path) {
+    send_register(0x40, id, path);
+  }
+
+  void send_state_observe(uint16_t id, const std::string &path) {
+    send_register(0x43, id, path);
+  }
+
+  void send_state_changed(uint16_t id, const std::string &path,
+                          const Known &state) {
+    send_buf.start_msg(0x41);
+    send_buf.write16(id);
+    send_buf.write_string(path);
+    send_buf.write_msgpack(*state.value);
+    send_buf.write_size();
+    send_send_buf();
+  }
+
+  void send_state_changed(uint16_t id, const std::string &path,
+                          const Unknown &state) {
+    send_buf.start_msg(0x42);
+    send_buf.write16(id);
+    send_buf.write_string(path);
+    send_buf.write_size();
+    send_send_buf();
+  }
+
+  void send_state_changed(uint16_t id, const std::string &path,
+                          const StateUpdate &state) {
+    std::visit([&](const auto &s) { send_state_changed(id, path, s); }, state);
   }
 
   void send_register(uint8_t message, uint16_t id, const std::string &path) {
@@ -400,6 +538,32 @@ public:
                     .first;
 
       c.send_action_register(id, it->first);
+    }
+
+    void operator()(StateRegister cmd) {
+      uint16_t id = c.get_id();
+      c.reply_channels.emplace(id, std::move(cmd.result_chan));
+      auto it = c.states.emplace(std::move(cmd.path), Unknown{}).first;
+
+      c.send_state_register(id, it->first);
+    }
+
+    void operator()(StateChanged cmd) {
+      uint16_t id = c.get_id();
+      c.reply_channels.emplace(id, std::move(cmd.result_chan));
+      c.states[cmd.path] = std::move(cmd.value);
+
+      c.send_state_changed(id, cmd.path, cmd.value);
+    }
+
+    void operator()(StateObserve cmd) {
+      uint16_t id = c.get_id();
+      c.reply_channels.emplace(id, std::move(cmd.result_chan));
+      auto it = c.state_channels
+                    .emplace(std::move(cmd.path), std::move(cmd.changed_chan))
+                    .first;
+
+      c.send_state_observe(id, it->first);
     }
 
     void operator()(Ping cmd) {
@@ -453,6 +617,9 @@ private:
   using ReplyChannel = std::variant<Channel<Result>, Channel<StateResult>>;
   std::map<uint16_t, ReplyChannel> reply_channels;
   std::map<std::string, Channel<Call>> action_channels;
+
+  std::map<std::string, StateUpdate> states;
+  std::map<std::string, Channel<StateUpdate>> state_channels;
 
   Channel<Command> on_command;
   Channel<std::tuple<uint16_t, uint16_t, Result>> on_reply;

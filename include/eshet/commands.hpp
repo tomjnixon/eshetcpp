@@ -18,11 +18,29 @@ struct ActionRegister {
   Channel<Call> call_chan;
 };
 
+struct StateRegister {
+  std::string path;
+  Channel<Result> result_chan;
+};
+
+struct StateChanged {
+  std::string path;
+  Channel<Result> result_chan;
+  StateUpdate value;
+};
+
+struct StateObserve {
+  std::string path;
+  Channel<StateResult> result_chan;
+  Channel<StateUpdate> changed_chan;
+};
+
 struct Ping {
   Channel<Result> result_chan;
 };
 
 struct Disconnect {};
 
-using Command = std::variant<ActionCall, ActionRegister, Ping, Disconnect>;
+using Command = std::variant<ActionCall, ActionRegister, StateRegister,
+                             StateChanged, StateObserve, Ping, Disconnect>;
 } // namespace eshet
