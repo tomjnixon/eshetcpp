@@ -150,12 +150,7 @@ private:
 
   // send and receive hello messages, returns success
   bool do_hello() {
-    send_buf.start_msg(id ? 0x02 : 0x01);
-    send_buf.write8(1);
-    send_buf.write16(timeout_config.server_timeout.count());
-    if (id)
-      send_buf.write_msgpack(id->get());
-    send_buf.write_size();
+    send_buf.write_hello(id, timeout_config.server_timeout.count());
     send_send_buf();
 
     while (true) {
@@ -257,7 +252,8 @@ private:
     for (auto &action : action_channels) {
       const std::string &path = action.first;
       uint16_t id = get_id();
-      send_action_register(id, path);
+      send_buf.write_action_register(id, path);
+      send_send_buf();
       if (!check_success(id, path))
         return false;
     }
@@ -265,12 +261,14 @@ private:
     for (auto &state : registered_states) {
       uint16_t id = get_id();
       const std::string &path = state.first;
-      send_state_register(id, path);
+      send_buf.write_state_register(id, path);
+      send_send_buf();
       if (!check_success(id, path))
         return false;
 
       id = get_id();
-      send_state_changed(id, path, state.second);
+      send_buf.write_state_changed(id, path, state.second);
+      send_send_buf();
       if (!check_success(id, path))
         return false;
     }
@@ -278,7 +276,8 @@ private:
     for (auto &state : observed_states) {
       uint16_t id = get_id();
       const std::string &path = state.first;
-      send_state_observe(id, path);
+      send_buf.write_state_observe(id, path);
+      send_send_buf();
       auto reply = wait_for_reply<StateResult>(id);
       if (!reply)
         return false;
@@ -340,12 +339,7 @@ private:
         std::tie(call_connection_id, id, result) = on_reply.read();
 
         if (call_connection_id == connection_id) {
-          send_buf.start_msg(std::holds_alternative<Success>(result) ? 0x05
-                                                                     : 0x06);
-          send_buf.write16(id);
-          send_buf.write_msgpack(
-              std::visit([](const auto &x) { return x.value.get(); }, result));
-          send_buf.write_size();
+          send_buf.write_reply(id, result);
           send_send_buf();
         }
       } break;
@@ -476,50 +470,6 @@ private:
       throw ProtocolError();
   }
 
-  void send_action_register(uint16_t id, const std::string &path) {
-    send_register(0x10, id, path);
-  }
-
-  void send_state_register(uint16_t id, const std::string &path) {
-    send_register(0x40, id, path);
-  }
-
-  void send_state_observe(uint16_t id, const std::string &path) {
-    send_register(0x43, id, path);
-  }
-
-  void send_state_changed(uint16_t id, const std::string &path,
-                          const Known &state) {
-    send_buf.start_msg(0x41);
-    send_buf.write16(id);
-    send_buf.write_string(path);
-    send_buf.write_msgpack(*state.value);
-    send_buf.write_size();
-    send_send_buf();
-  }
-
-  void send_state_changed(uint16_t id, const std::string &path,
-                          const Unknown &state) {
-    send_buf.start_msg(0x42);
-    send_buf.write16(id);
-    send_buf.write_string(path);
-    send_buf.write_size();
-    send_send_buf();
-  }
-
-  void send_state_changed(uint16_t id, const std::string &path,
-                          const StateUpdate &state) {
-    std::visit([&](const auto &s) { send_state_changed(id, path, s); }, state);
-  }
-
-  void send_register(uint8_t message, uint16_t id, const std::string &path) {
-    send_buf.start_msg(message);
-    send_buf.write16(id);
-    send_buf.write_string(path);
-    send_buf.write_size();
-    send_send_buf();
-  }
-
   struct CommandVisitor {
     CommandVisitor(ESHETClient &c) : c(c) {}
 
@@ -528,11 +478,7 @@ private:
 
       c.reply_channels.emplace(id, std::move(cmd.result_chan));
 
-      c.send_buf.start_msg(0x11);
-      c.send_buf.write16(id);
-      c.send_buf.write_string(cmd.path);
-      c.send_buf.write_msgpack(*cmd.args);
-      c.send_buf.write_size();
+      c.send_buf.write_action_call(id, cmd.path, *cmd.args);
       c.send_send_buf();
     }
 
@@ -543,7 +489,8 @@ private:
                     .emplace(std::move(cmd.path), std::move(cmd.call_chan))
                     .first;
 
-      c.send_action_register(id, it->first);
+      c.send_buf.write_action_register(id, it->first);
+      c.send_send_buf();
     }
 
     void operator()(StateRegister cmd) {
@@ -552,7 +499,8 @@ private:
       auto it =
           c.registered_states.emplace(std::move(cmd.path), Unknown{}).first;
 
-      c.send_state_register(id, it->first);
+      c.send_buf.write_state_register(id, it->first);
+      c.send_send_buf();
     }
 
     void operator()(StateChanged cmd) {
@@ -560,7 +508,8 @@ private:
       c.reply_channels.emplace(id, std::move(cmd.result_chan));
       c.registered_states[cmd.path] = std::move(cmd.value);
 
-      c.send_state_changed(id, cmd.path, cmd.value);
+      c.send_buf.write_state_changed(id, cmd.path, cmd.value);
+      c.send_send_buf();
     }
 
     void operator()(StateObserve cmd) {
@@ -570,16 +519,15 @@ private:
                     .emplace(std::move(cmd.path), std::move(cmd.changed_chan))
                     .first;
 
-      c.send_state_observe(id, it->first);
+      c.send_buf.write_state_observe(id, it->first);
+      c.send_send_buf();
     }
 
     void operator()(Ping cmd) {
       uint16_t id = c.get_id();
       c.reply_channels.emplace(id, std::move(cmd.result_chan));
 
-      c.send_buf.start_msg(0x09);
-      c.send_buf.write16(id);
-      c.send_buf.write_size();
+      c.send_buf.write_ping(id);
       c.send_send_buf();
     }
 

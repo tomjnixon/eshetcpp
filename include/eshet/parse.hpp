@@ -81,6 +81,93 @@ struct SendBuf {
     sbuf.data()[2] = size_fmt[1];
   }
 
+  // methods for writing common eshet command formats
+
+  void write_path(uint8_t message, uint16_t id, const std::string &path) {
+    start_msg(message);
+    write16(id);
+    write_string(path);
+    write_size();
+  }
+
+  void write_pack(uint8_t message, uint16_t id, const msgpack::object &value) {
+    start_msg(message);
+    write16(id);
+    write_msgpack(value);
+    write_size();
+  }
+
+  void write_path_pack(uint8_t message, uint16_t id, const std::string &path,
+                       const msgpack::object &value) {
+    start_msg(message);
+    write16(id);
+    write_string(path);
+    write_msgpack(value);
+    write_size();
+  }
+
+  // methods for writing whole eshet commands
+
+  void write_hello(const std::optional<msgpack::object_handle> &id,
+                   uint16_t server_timeout) {
+    start_msg(id ? 0x02 : 0x01);
+    write8(1);
+    write16(server_timeout);
+    if (id)
+      write_msgpack(**id);
+    write_size();
+  }
+
+  void write_reply(uint16_t id, const Success &success) {
+    write_pack(0x05, id, *success.value);
+  }
+
+  void write_reply(uint16_t id, const Error &error) {
+    write_pack(0x06, id, *error.value);
+  }
+
+  void write_reply(uint16_t id, const Result &result) {
+    std::visit([&](const auto &r) { write_reply(id, r); }, result);
+  }
+
+  void write_action_register(uint16_t id, const std::string &path) {
+    write_path(0x10, id, path);
+  }
+
+  void write_action_call(uint16_t id, const std::string &path,
+                         const msgpack::object &args) {
+    write_path_pack(0x11, id, path, args);
+  }
+
+  void write_state_register(uint16_t id, const std::string &path) {
+    write_path(0x40, id, path);
+  }
+
+  void write_state_observe(uint16_t id, const std::string &path) {
+    write_path(0x43, id, path);
+  }
+
+  void write_state_changed(uint16_t id, const std::string &path,
+                           const Known &state) {
+    write_path_pack(0x41, id, path, *state.value);
+  }
+
+  void write_state_changed(uint16_t id, const std::string &path,
+                           const Unknown &state) {
+    write_path(0x42, id, path);
+  }
+
+  void write_state_changed(uint16_t id, const std::string &path,
+                           const StateUpdate &state) {
+    std::visit([&](const auto &s) { write_state_changed(id, path, s); }, state);
+  }
+
+  void write_ping(uint16_t id) {
+    start_msg(0x09);
+    write16(id);
+    write_size();
+  }
+
   msgpack::sbuffer sbuf;
 };
 
