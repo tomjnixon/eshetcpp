@@ -77,6 +77,41 @@ public:
 
   void test_disconnect() { on_command.emplace(Disconnect{}); }
 
+  // disconnect and stop the threads. It's not necessary to call this, but it
+  // may help the destructor run faster
+  void exit() { should_exit.push(true); }
+
+protected:
+  void run() {
+    // repeatedly call loop, with exponential backoff from min_delay to
+    // max_delay, resetting back to min_delay if loop runs for at least
+    // reset_thresh
+    const std::chrono::seconds min_delay(1);
+    const std::chrono::seconds max_delay(30);
+    const std::chrono::seconds reset_thresh(10);
+
+    std::chrono::seconds delay(min_delay);
+
+    while (true) {
+      auto start = clock::now();
+      loop();
+      auto end = clock::now();
+
+      if ((end - start) >= reset_thresh)
+        delay = min_delay;
+
+      if (wait_for(delay, should_exit) == 0) {
+        cleanup_connection();
+        return;
+      }
+
+      delay *= 2;
+      if (delay > max_delay)
+        delay = max_delay;
+    }
+  }
+
+private:
   void cleanup_connection() {
     if (recv_thread) {
       recv_thread.reset();
@@ -253,35 +288,6 @@ public:
     }
 
     return true;
-  }
-
-  void run() {
-    // repeatedly call loop, with exponential backoff from min_delay to
-    // max_delay, resetting back to min_delay if loop runs for at least
-    // reset_thresh
-    const std::chrono::seconds min_delay(1);
-    const std::chrono::seconds max_delay(30);
-    const std::chrono::seconds reset_thresh(10);
-
-    std::chrono::seconds delay(min_delay);
-
-    while (true) {
-      auto start = clock::now();
-      loop();
-      auto end = clock::now();
-
-      if ((end - start) >= reset_thresh)
-        delay = min_delay;
-
-      if (wait_for(delay, should_exit) == 0) {
-        cleanup_connection();
-        return;
-      }
-
-      delay *= 2;
-      if (delay > max_delay)
-        delay = max_delay;
-    }
   }
 
   // connect, say hello, then loop recieving messages; returns if there was
@@ -591,9 +597,6 @@ public:
       throw Disconnected{};
   }
 
-  void exit() { should_exit.push(true); }
-
-private:
   std::string hostname;
   int port;
   std::optional<msgpack::object_handle> id;
