@@ -91,7 +91,7 @@ int main(int argc, char **argv) {
     for (auto &arg : args)
       args_o.emplace_back(json_str_to_msgpack(arg, *zone));
 
-    ActorThread<ESHETClient> client(get_host_port());
+    ESHETClient client(get_host_port());
     Channel<Result> call_result;
     client.action_call_pack(path, call_result, args_o);
     auto res = call_result.read();

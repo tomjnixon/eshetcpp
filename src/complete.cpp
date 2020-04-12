@@ -16,7 +16,7 @@ std::pair<std::string, std::string> split_path(std::string path) {
 }
 
 int main(int argc, char **argv) {
-  ActorThread<ESHETClient> client(get_host_port());
+  ESHETClient client(get_host_port());
 
   assert(argc >= 3);
   std::string word = argv[2];

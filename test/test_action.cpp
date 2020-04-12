@@ -35,11 +35,11 @@ private:
 };
 
 TEST_CASE("make and call") {
-  ActorThread<ESHETClient> client1("localhost", 11236);
+  ESHETClient client1("localhost", 11236);
   ActorThread<TestAction> test_action(client1);
 
   Actor self;
-  ActorThread<ESHETClient> client2("localhost", 11236);
+  ESHETClient client2("localhost", 11236);
 
   auto do_call = [&]() {
     Channel<Result> call_result(self);
@@ -70,8 +70,8 @@ TEST_CASE("make and call") {
 }
 
 TEST_CASE("disconnected reply") {
-  ActorThread<ESHETClient> client1("localhost", 11236);
-  ActorThread<ESHETClient> client2("localhost", 11236);
+  ESHETClient client1("localhost", 11236);
+  ESHETClient client2("localhost", 11236);
 
   Channel<Result> result_chan;
   Channel<Call> action_chan;

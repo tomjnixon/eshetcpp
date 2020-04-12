@@ -10,7 +10,6 @@
 
 namespace eshet {
 using namespace actorpp;
-using namespace detail;
 
 struct TimeoutConfig {
   // send a ping if we haven't sent anything for this long
@@ -22,24 +21,26 @@ struct TimeoutConfig {
   std::chrono::seconds ping_timeout{5};
 };
 
-class ESHETClient : public Actor {
+namespace detail {
+
+class ESHETClientActor : public Actor {
   using clock = std::chrono::steady_clock;
   using time_point = std::chrono::time_point<clock>;
 
 public:
-  ESHETClient(const std::string &hostname, int port,
-              std::optional<msgpack::object_handle> id = {},
-              TimeoutConfig timeout_config = {})
+  ESHETClientActor(const std::string &hostname, int port,
+                   std::optional<msgpack::object_handle> id = {},
+                   TimeoutConfig timeout_config = {})
       : hostname(hostname), port(port), id(std::move(id)),
         timeout_config(std::move(timeout_config)), ping_result(*this),
         should_exit(*this), on_message(*this), on_close(*this),
         on_command(*this), on_reply(*this), send_buf(128) {}
 
-  ESHETClient(const std::pair<std::string, int> &hostport,
-              std::optional<msgpack::object_handle> id = {},
-              TimeoutConfig timeout_config = {})
-      : ESHETClient(hostport.first, hostport.second, std::move(id),
-                    std::move(timeout_config)) {}
+  ESHETClientActor(const std::pair<std::string, int> &hostport,
+                   std::optional<msgpack::object_handle> id = {},
+                   TimeoutConfig timeout_config = {})
+      : ESHETClientActor(hostport.first, hostport.second, std::move(id),
+                         std::move(timeout_config)) {}
 
   template <typename T>
   void action_call_pack(std::string path, Channel<Result> result_chan,
@@ -340,7 +341,7 @@ private:
   }
 
   struct CheckResultSuccessVisitor {
-    ESHETClient &c;
+    ESHETClientActor &c;
     const std::string &path;
 
     bool operator()(const Success &s) { return true; }
@@ -353,7 +354,7 @@ private:
   };
 
   struct HandleStateReplyVisitor {
-    ESHETClient &c;
+    ESHETClientActor &c;
     const std::string &path;
     Channel<StateUpdate> &channel;
 
@@ -376,7 +377,7 @@ private:
   // methods for handling commands from the user and sending outgoing messages
 
   struct CommandVisitor {
-    CommandVisitor(ESHETClient &c) : c(c) {}
+    CommandVisitor(ESHETClientActor &c) : c(c) {}
 
     void operator()(ActionCall cmd) {
       uint16_t id = c.get_id();
@@ -438,7 +439,7 @@ private:
 
     void operator()(Disconnect d) { c.on_close.push(CloseReason::Error); }
 
-    ESHETClient &c;
+    ESHETClientActor &c;
   };
 
   uint16_t get_id() { return next_id++; }
@@ -584,5 +585,10 @@ private:
 
   SendBuf send_buf;
   uint16_t next_id = 0;
-}; // namespace eshet
+};
+
+} // namespace detail
+
+using ESHETClient = ActorThread<detail::ESHETClientActor>;
+
 } // namespace eshet

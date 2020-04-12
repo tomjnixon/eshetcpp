@@ -6,7 +6,7 @@ using namespace eshet;
 
 TEST_CASE("make a state and observe") {
   // connect one client which has a state
-  ActorThread<ESHETClient> client("localhost", 11236);
+  ESHETClient client("localhost", 11236);
 
   Actor self;
   Channel<Result> register_result(self);
@@ -16,7 +16,7 @@ TEST_CASE("make a state and observe") {
   // connect another client which observes the state, and check that it gets
   // the unknown callback
 
-  ActorThread<ESHETClient> client2("localhost", 11236);
+  ESHETClient client2("localhost", 11236);
 
   Channel<StateResult> observe_result(self);
   Channel<StateUpdate> on_change(self);
@@ -46,7 +46,7 @@ TEST_CASE("make a state and observe") {
 
 TEST_CASE("test_reconnection") {
   // connect one client which has a state
-  ActorThread<ESHETClient> client("localhost", 11236);
+  ESHETClient client("localhost", 11236);
 
   Actor self;
   Channel<Result> register_result(self);
@@ -56,7 +56,7 @@ TEST_CASE("test_reconnection") {
   // connect another client which observes the state, and check that it gets
   // the unknown callback
 
-  ActorThread<ESHETClient> client2("localhost", 11236);
+  ESHETClient client2("localhost", 11236);
 
   Channel<StateResult> observe_result(self);
   Channel<StateUpdate> on_change(self);
