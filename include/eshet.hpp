@@ -303,7 +303,7 @@ public:
                          on_command, should_exit)) {
       case -1: {
         if (timeout == idle_timeout) {
-          std::visit(CommandVisitor(*this), Command{Ping{ping_result}});
+          CommandVisitor{*this}(Ping{ping_result});
           ping_timeout = clock::now() + timeout_config.ping_timeout;
         } else { // ping_timeout
           return;
