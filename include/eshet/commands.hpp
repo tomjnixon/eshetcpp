@@ -4,6 +4,7 @@
 #include "msgpack.hpp"
 
 namespace eshet {
+namespace detail {
 using namespace actorpp;
 
 struct ActionCall {
@@ -43,4 +44,5 @@ struct Disconnect {};
 
 using Command = std::variant<ActionCall, ActionRegister, StateRegister,
                              StateChanged, StateObserve, Ping, Disconnect>;
+} // namespace detail
 } // namespace eshet
