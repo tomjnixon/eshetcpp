@@ -113,7 +113,7 @@ protected:
   }
 
 private:
-  // connect, say hello, then loop recieving messages; returns if there was
+  // connect, say hello, then loop receiving messages; returns if there was
   // an error, or if we should exit
   void loop() {
     if (!connect())
