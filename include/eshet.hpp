@@ -112,183 +112,6 @@ protected:
   }
 
 private:
-  void cleanup_connection() {
-    if (recv_thread) {
-      recv_thread.reset();
-    }
-    if (sockfd != -1) {
-      assert(close(sockfd) == 0);
-      sockfd = -1;
-    }
-
-    ping_result.clear();
-    on_close.clear();
-    on_message.clear();
-
-    for (auto &pair : reply_channels)
-      std::visit([](auto &c) { c.push(Error("disconnected")); }, pair.second);
-    reply_channels.clear();
-
-    for (auto &state : observed_states)
-      state.second.emplace(Unknown{});
-  }
-
-  bool connect() {
-    cleanup_connection();
-
-    try {
-      sockfd = actorpp::connect(hostname, port);
-    } catch (std::runtime_error &e) {
-      log.error(e.what());
-      return false;
-    }
-
-    recv_thread = std::make_unique<actorpp::ActorThread<actorpp::RecvThread>>(
-        sockfd, on_message, on_close);
-    return true;
-  }
-
-  // send and receive hello messages, returns success
-  bool do_hello() {
-    send_buf.write_hello(id, timeout_config.server_timeout.count());
-    send_send_buf();
-
-    while (true) {
-      switch (wait(on_close, on_message, should_exit)) {
-      case 0:
-        on_close.read();
-        return false;
-      case 1: {
-        unpacker.push(on_message.read());
-
-        std::optional<std::vector<uint8_t>> message;
-        if ((message = unpacker.read())) {
-          handle_hello_message(*message);
-
-          // no reason for the server to have sent us any more messages here
-          assert(!unpacker.read());
-          return true;
-        }
-      } break;
-      case 2:
-        return false;
-      }
-    }
-  }
-
-  struct CheckResultSuccess {
-    ESHETClient &c;
-    const std::string &path;
-
-    bool operator()(const Success &s) { return true; }
-    bool operator()(const Error &e) {
-      std::stringstream error_msg;
-      error_msg << "error while adding " << path << ": " << e.value.get();
-      c.log.error(error_msg.str());
-      return false;
-    }
-  };
-
-  struct HandleStateReply {
-    ESHETClient &c;
-    const std::string &path;
-    Channel<StateUpdate> &channel;
-
-    bool operator()(Known s) {
-      channel.push(std::move(s));
-      return true;
-    }
-    bool operator()(Unknown s) {
-      channel.push(std::move(s));
-      return true;
-    }
-    bool operator()(const Error &e) {
-      std::stringstream error_msg;
-      error_msg << "error while adding " << path << ": " << e.value.get();
-      c.log.error(error_msg.str());
-      return false;
-    }
-  };
-
-  // wait for a reply message, and check that it is not an error, while
-  // processing other messages normally
-  bool check_success(uint16_t id, const std::string &path) {
-    auto reply = wait_for_reply<Result>(id);
-    if (reply)
-      return std::visit(CheckResultSuccess{*this, path}, *reply);
-    else
-      return false;
-  }
-
-  template <typename ResultT>
-  std::optional<ResultT> wait_for_reply(uint16_t id) {
-    Channel<ResultT> result_chan(*this);
-    reply_channels.emplace(id, result_chan);
-
-    while (true) {
-      switch (wait(on_close, on_message, result_chan, should_exit)) {
-      case 0: // on_close
-        on_close.read();
-        return {};
-      case 1: { // on_message
-        unpacker.push(on_message.read());
-
-        std::optional<std::vector<uint8_t>> message;
-        while ((message = unpacker.read())) {
-          handle_message(*message);
-        }
-      } break;
-      case 2: { // result_chan
-        return result_chan.read();
-      } break;
-      case 3:
-        return {};
-      }
-    }
-  }
-
-  // send registration commands after reconnecting
-  bool reregister() {
-    for (auto &action : action_channels) {
-      const std::string &path = action.first;
-      uint16_t id = get_id();
-      send_buf.write_action_register(id, path);
-      send_send_buf();
-      if (!check_success(id, path))
-        return false;
-    }
-
-    for (auto &state : registered_states) {
-      uint16_t id = get_id();
-      const std::string &path = state.first;
-      send_buf.write_state_register(id, path);
-      send_send_buf();
-      if (!check_success(id, path))
-        return false;
-
-      id = get_id();
-      send_buf.write_state_changed(id, path, state.second);
-      send_send_buf();
-      if (!check_success(id, path))
-        return false;
-    }
-
-    for (auto &state : observed_states) {
-      uint16_t id = get_id();
-      const std::string &path = state.first;
-      send_buf.write_state_observe(id, path);
-      send_send_buf();
-      auto reply = wait_for_reply<StateResult>(id);
-      if (!reply)
-        return false;
-      if (!std::visit(HandleStateReply{*this, path, state.second},
-                      std::move(*reply)))
-        return false;
-    }
-
-    return true;
-  }
-
   // connect, say hello, then loop recieving messages; returns if there was
   // an error, or if we should exit
   void loop() {
@@ -353,6 +176,72 @@ private:
     }
   }
 
+  // methods relating to connection setup and teardown
+
+  bool connect() {
+    cleanup_connection();
+
+    try {
+      sockfd = actorpp::connect(hostname, port);
+    } catch (std::runtime_error &e) {
+      log.error(e.what());
+      return false;
+    }
+
+    recv_thread = std::make_unique<actorpp::ActorThread<actorpp::RecvThread>>(
+        sockfd, on_message, on_close);
+    return true;
+  }
+
+  void cleanup_connection() {
+    if (recv_thread) {
+      recv_thread.reset();
+    }
+    if (sockfd != -1) {
+      assert(close(sockfd) == 0);
+      sockfd = -1;
+    }
+
+    ping_result.clear();
+    on_close.clear();
+    on_message.clear();
+
+    for (auto &pair : reply_channels)
+      std::visit([](auto &c) { c.push(Error("disconnected")); }, pair.second);
+    reply_channels.clear();
+
+    for (auto &state : observed_states)
+      state.second.emplace(Unknown{});
+  }
+
+  // send and receive hello messages, returns success
+  bool do_hello() {
+    send_buf.write_hello(id, timeout_config.server_timeout.count());
+    send_send_buf();
+
+    while (true) {
+      switch (wait(on_close, on_message, should_exit)) {
+      case 0:
+        on_close.read();
+        return false;
+      case 1: {
+        unpacker.push(on_message.read());
+
+        std::optional<std::vector<uint8_t>> message;
+        if ((message = unpacker.read())) {
+          handle_hello_message(*message);
+
+          // no reason for the server to have sent us any more messages here
+          assert(!unpacker.read());
+          return true;
+        }
+      } break;
+      case 2:
+        return false;
+      }
+    }
+  }
+
   void handle_hello_message(const std::vector<uint8_t> &msg) {
     if (msg.size() < 1)
       throw ProtocolError();
@@ -370,6 +259,198 @@ private:
       throw ProtocolError();
     }
   }
+
+  // send registration commands after reconnecting
+  bool reregister() {
+    for (auto &action : action_channels) {
+      const std::string &path = action.first;
+      uint16_t id = get_id();
+      send_buf.write_action_register(id, path);
+      send_send_buf();
+      if (!check_success(id, path))
+        return false;
+    }
+
+    for (auto &state : registered_states) {
+      uint16_t id = get_id();
+      const std::string &path = state.first;
+      send_buf.write_state_register(id, path);
+      send_send_buf();
+      if (!check_success(id, path))
+        return false;
+
+      id = get_id();
+      send_buf.write_state_changed(id, path, state.second);
+      send_send_buf();
+      if (!check_success(id, path))
+        return false;
+    }
+
+    for (auto &state : observed_states) {
+      uint16_t id = get_id();
+      const std::string &path = state.first;
+      send_buf.write_state_observe(id, path);
+      send_send_buf();
+      auto reply = wait_for_reply<StateResult>(id);
+      if (!reply)
+        return false;
+      if (!std::visit(HandleStateReplyVisitor{*this, path, state.second},
+                      std::move(*reply)))
+        return false;
+    }
+
+    return true;
+  }
+
+  // wait for a reply message, and check that it is not an error, while
+  // processing other messages normally
+  bool check_success(uint16_t id, const std::string &path) {
+    auto reply = wait_for_reply<Result>(id);
+    if (reply)
+      return std::visit(CheckResultSuccessVisitor{*this, path}, *reply);
+    else
+      return false;
+  }
+
+  template <typename ResultT>
+  std::optional<ResultT> wait_for_reply(uint16_t id) {
+    Channel<ResultT> result_chan(*this);
+    reply_channels.emplace(id, result_chan);
+
+    while (true) {
+      switch (wait(on_close, on_message, result_chan, should_exit)) {
+      case 0: // on_close
+        on_close.read();
+        return {};
+      case 1: { // on_message
+        unpacker.push(on_message.read());
+
+        std::optional<std::vector<uint8_t>> message;
+        while ((message = unpacker.read())) {
+          handle_message(*message);
+        }
+      } break;
+      case 2: { // result_chan
+        return result_chan.read();
+      } break;
+      case 3:
+        return {};
+      }
+    }
+  }
+
+  struct CheckResultSuccessVisitor {
+    ESHETClient &c;
+    const std::string &path;
+
+    bool operator()(const Success &s) { return true; }
+    bool operator()(const Error &e) {
+      std::stringstream error_msg;
+      error_msg << "error while adding " << path << ": " << e.value.get();
+      c.log.error(error_msg.str());
+      return false;
+    }
+  };
+
+  struct HandleStateReplyVisitor {
+    ESHETClient &c;
+    const std::string &path;
+    Channel<StateUpdate> &channel;
+
+    bool operator()(Known s) {
+      channel.push(std::move(s));
+      return true;
+    }
+    bool operator()(Unknown s) {
+      channel.push(std::move(s));
+      return true;
+    }
+    bool operator()(const Error &e) {
+      std::stringstream error_msg;
+      error_msg << "error while adding " << path << ": " << e.value.get();
+      c.log.error(error_msg.str());
+      return false;
+    }
+  };
+
+  // methods for handling commands from the user and sending outgoing messages
+
+  struct CommandVisitor {
+    CommandVisitor(ESHETClient &c) : c(c) {}
+
+    void operator()(ActionCall cmd) {
+      uint16_t id = c.get_id();
+
+      c.reply_channels.emplace(id, std::move(cmd.result_chan));
+
+      c.send_buf.write_action_call(id, cmd.path, *cmd.args);
+      c.send_send_buf();
+    }
+
+    void operator()(ActionRegister cmd) {
+      uint16_t id = c.get_id();
+      c.reply_channels.emplace(id, std::move(cmd.result_chan));
+      auto it = c.action_channels
+                    .emplace(std::move(cmd.path), std::move(cmd.call_chan))
+                    .first;
+
+      c.send_buf.write_action_register(id, it->first);
+      c.send_send_buf();
+    }
+
+    void operator()(StateRegister cmd) {
+      uint16_t id = c.get_id();
+      c.reply_channels.emplace(id, std::move(cmd.result_chan));
+      auto it =
+          c.registered_states.emplace(std::move(cmd.path), Unknown{}).first;
+
+      c.send_buf.write_state_register(id, it->first);
+      c.send_send_buf();
+    }
+
+    void operator()(StateChanged cmd) {
+      uint16_t id = c.get_id();
+      c.reply_channels.emplace(id, std::move(cmd.result_chan));
+      c.registered_states[cmd.path] = std::move(cmd.value);
+
+      c.send_buf.write_state_changed(id, cmd.path, cmd.value);
+      c.send_send_buf();
+    }
+
+    void operator()(StateObserve cmd) {
+      uint16_t id = c.get_id();
+      c.reply_channels.emplace(id, std::move(cmd.result_chan));
+      auto it = c.observed_states
+                    .emplace(std::move(cmd.path), std::move(cmd.changed_chan))
+                    .first;
+
+      c.send_buf.write_state_observe(id, it->first);
+      c.send_send_buf();
+    }
+
+    void operator()(Ping cmd) {
+      uint16_t id = c.get_id();
+      c.reply_channels.emplace(id, std::move(cmd.result_chan));
+
+      c.send_buf.write_ping(id);
+      c.send_send_buf();
+    }
+
+    void operator()(Disconnect d) { c.on_close.push(CloseReason::Error); }
+
+    ESHETClient &c;
+  };
+
+  uint16_t get_id() { return next_id++; }
+
+  void send_send_buf() {
+    idle_timeout = clock::now() + timeout_config.idle_ping;
+    if (send(sockfd, send_buf.sbuf.data(), send_buf.sbuf.size(), MSG_NOSIGNAL) <
+        0)
+      throw Disconnected{};
+  }
+
+  // methods for handling incoming messages
 
   void handle_message(const std::vector<uint8_t> &msg) {
     if (msg.size() < 1)
@@ -468,81 +549,6 @@ private:
             nh.mapped()))
       // wrong type of return
       throw ProtocolError();
-  }
-
-  struct CommandVisitor {
-    CommandVisitor(ESHETClient &c) : c(c) {}
-
-    void operator()(ActionCall cmd) {
-      uint16_t id = c.get_id();
-
-      c.reply_channels.emplace(id, std::move(cmd.result_chan));
-
-      c.send_buf.write_action_call(id, cmd.path, *cmd.args);
-      c.send_send_buf();
-    }
-
-    void operator()(ActionRegister cmd) {
-      uint16_t id = c.get_id();
-      c.reply_channels.emplace(id, std::move(cmd.result_chan));
-      auto it = c.action_channels
-                    .emplace(std::move(cmd.path), std::move(cmd.call_chan))
-                    .first;
-
-      c.send_buf.write_action_register(id, it->first);
-      c.send_send_buf();
-    }
-
-    void operator()(StateRegister cmd) {
-      uint16_t id = c.get_id();
-      c.reply_channels.emplace(id, std::move(cmd.result_chan));
-      auto it =
-          c.registered_states.emplace(std::move(cmd.path), Unknown{}).first;
-
-      c.send_buf.write_state_register(id, it->first);
-      c.send_send_buf();
-    }
-
-    void operator()(StateChanged cmd) {
-      uint16_t id = c.get_id();
-      c.reply_channels.emplace(id, std::move(cmd.result_chan));
-      c.registered_states[cmd.path] = std::move(cmd.value);
-
-      c.send_buf.write_state_changed(id, cmd.path, cmd.value);
-      c.send_send_buf();
-    }
-
-    void operator()(StateObserve cmd) {
-      uint16_t id = c.get_id();
-      c.reply_channels.emplace(id, std::move(cmd.result_chan));
-      auto it = c.observed_states
-                    .emplace(std::move(cmd.path), std::move(cmd.changed_chan))
-                    .first;
-
-      c.send_buf.write_state_observe(id, it->first);
-      c.send_send_buf();
-    }
-
-    void operator()(Ping cmd) {
-      uint16_t id = c.get_id();
-      c.reply_channels.emplace(id, std::move(cmd.result_chan));
-
-      c.send_buf.write_ping(id);
-      c.send_send_buf();
-    }
-
-    void operator()(Disconnect d) { c.on_close.push(CloseReason::Error); }
-
-    ESHETClient &c;
-  };
-
-  uint16_t get_id() { return next_id++; }
-
-  void send_send_buf() {
-    idle_timeout = clock::now() + timeout_config.idle_ping;
-    if (send(sockfd, send_buf.sbuf.data(), send_buf.sbuf.size(), MSG_NOSIGNAL) <
-        0)
-      throw Disconnected{};
   }
 
   std::string hostname;
