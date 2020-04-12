@@ -169,7 +169,7 @@ private:
       } break;
       case 4: {
         Command c = on_command.read();
-        std::visit(CommandVisitor(*this), std::move(c));
+        std::visit(CommandVisitor{*this}, std::move(c));
       } break;
       case 5:
         return;
@@ -377,7 +377,7 @@ private:
   // methods for handling commands from the user and sending outgoing messages
 
   struct CommandVisitor {
-    CommandVisitor(ESHETClientActor &c) : c(c) {}
+    ESHETClientActor &c;
 
     void operator()(ActionCall cmd) {
       uint16_t id = c.get_id();
@@ -438,8 +438,6 @@ private:
     }
 
     void operator()(Disconnect d) { c.on_close.push(CloseReason::Error); }
-
-    ESHETClientActor &c;
   };
 
   uint16_t get_id() { return next_id++; }
