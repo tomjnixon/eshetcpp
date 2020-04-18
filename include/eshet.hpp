@@ -130,7 +130,7 @@ private:
 
       switch (wait_until(timeout, ping_result, on_close, on_message, on_reply,
                          on_command, should_exit)) {
-      case -1: {
+      case -1: { // timeout
         if (timeout == idle_timeout) {
           CommandVisitor{*this}(Ping{ping_result});
           ping_timeout = clock::now() + timeout_config.ping_timeout;
@@ -138,17 +138,17 @@ private:
           return;
         }
       } break;
-      case 0: {
+      case 0: { // ping_result
         Result r = ping_result.read();
         if (!std::holds_alternative<Success>(r))
           throw ProtocolError(); // bad response to ping
         ping_timeout.reset();
       } break;
-      case 1: {
+      case 1: { // on_close
         on_close.read(); // XXX: do something with this
         return;
       } break;
-      case 2: {
+      case 2: { // on_message
         unpacker.push(on_message.read());
 
         std::optional<std::vector<uint8_t>> message;
@@ -156,7 +156,7 @@ private:
           handle_message(*message);
         }
       } break;
-      case 3: {
+      case 3: { // on_reply
         uint16_t call_connection_id;
         uint16_t id;
         Result result;
@@ -167,12 +167,13 @@ private:
           send_send_buf();
         }
       } break;
-      case 4: {
+      case 4: { // on_command
         Command c = on_command.read();
         std::visit(CommandVisitor{*this}, std::move(c));
       } break;
-      case 5:
+      case 5: { // should_exit
         return;
+      } break;
       }
     }
   }
