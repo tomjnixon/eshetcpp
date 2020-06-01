@@ -76,6 +76,18 @@ public:
     on_command.emplace(StateObserve{path, result_chan, changed_chan});
   }
 
+  void event_register(std::string path, Channel<Result> result_chan) {
+    on_command.emplace(EventRegister{path, result_chan});
+  }
+
+  template <typename T>
+  void event_emit(std::string path, const T &value,
+                  Channel<Result> result_chan) {
+    std::unique_ptr<msgpack::zone> z = std::make_unique<msgpack::zone>();
+    msgpack::object_handle oh(msgpack::object(value, *z), std::move(z));
+    on_command.emplace(EventEmit{path, result_chan, std::move(oh)});
+  }
+
   void test_disconnect() { on_command.emplace(Disconnect{}); }
 
   // disconnect and stop the threads. It's not necessary to call this, but it
@@ -301,6 +313,14 @@ private:
         return false;
     }
 
+    for (auto &path : registered_events) {
+      uint16_t id = get_id();
+      send_buf.write_event_register(id, path);
+      send_send_buf();
+      if (!check_success(id, path))
+        return false;
+    }
+
     return true;
   }
 
@@ -427,6 +447,24 @@ private:
                     .first;
 
       c.send_buf.write_state_observe(id, it->first);
+      c.send_send_buf();
+    }
+
+    void operator()(EventRegister cmd) {
+      uint16_t id = c.get_id();
+      c.reply_channels.emplace(id, std::move(cmd.result_chan));
+
+      auto it = c.registered_events.emplace(std::move(cmd.path)).first;
+
+      c.send_buf.write_event_register(id, *it);
+      c.send_send_buf();
+    }
+
+    void operator()(EventEmit cmd) {
+      uint16_t id = c.get_id();
+      c.reply_channels.emplace(id, std::move(cmd.result_chan));
+
+      c.send_buf.write_event_emit(id, cmd.path, *cmd.value);
       c.send_send_buf();
     }
 
@@ -578,6 +616,8 @@ private:
 
   std::map<std::string, StateUpdate> registered_states;
   std::map<std::string, Channel<StateUpdate>> observed_states;
+
+  std::set<std::string> registered_events;
 
   Channel<Command> on_command;
   Channel<std::tuple<uint16_t, uint16_t, Result>> on_reply;

@@ -162,6 +162,15 @@ struct SendBuf {
     std::visit([&](const auto &s) { write_state_changed(id, path, s); }, state);
   }
 
+  void write_event_register(uint16_t id, const std::string &path) {
+    write_path(0x30, id, path);
+  }
+
+  void write_event_emit(uint16_t id, const std::string &path,
+                        const msgpack::object &value) {
+    write_path_pack(0x31, id, path, value);
+  }
+
   void write_ping(uint16_t id) {
     start_msg(0x09);
     write16(id);
