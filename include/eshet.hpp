@@ -216,16 +216,19 @@ private:
       sockfd = -1;
     }
 
-    ping_result.clear();
-    on_close.clear();
-    on_message.clear();
-
     for (auto &pair : reply_channels)
       std::visit([](auto &c) { c.push(Error("disconnected")); }, pair.second);
     reply_channels.clear();
 
     for (auto &state : observed_states)
       state.second.emplace(Unknown{});
+
+    ping_timeout.reset();
+    // make sure to clear this after sending the disconnected messages,
+    // otherwise there may still be a disconnect message left over
+    ping_result.clear();
+    on_close.clear();
+    on_message.clear();
   }
 
   // send and receive hello messages, returns success
