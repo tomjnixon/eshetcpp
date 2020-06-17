@@ -65,40 +65,89 @@ msgpack::object_handle json_str_to_msgpack(std::string json) {
   return {obj, std::move(zone)};
 }
 
-int handle_result(const Success &r) {
-  std::cout << r.value.get() << std::endl;
-  return 0;
+/// check that a result is not an error, throwing otherwise
+void check_result(const Success &r) {}
+void check_result(const Error &r) {
+  std::stringstream ss;
+  ss << r.value.get();
+  throw error_message(ss.str());
 }
 
-int handle_result(const Error &r) {
-  std::cout << r << std::endl;
-  return 1;
-}
+/// print a result, or throw if it's an error
+void show_result(const Success &r) { std::cout << r.value.get() << std::endl; }
+void show_result(const Known &r) { std::cout << r.value.get() << std::endl; }
+void show_result(const Unknown &r) { std::cout << "unknown" << std::endl; }
+void show_result(const Error &r) { check_result(r); }
 
 int main(int argc, char **argv) {
   CLI::App app{"eshet CLI"};
 
   CLI::App *call = app.add_subcommand("call", "call an action");
 
-  std::string path;
-  std::vector<std::string> args;
-  call->add_option("path", path)->required();
-  call->add_option("args", args);
-  call->callback([&]() {
-    std::vector<msgpack::object> args_o;
+  {
+    std::string path;
+    std::vector<std::string> args;
+    call->add_option("path", path)->required();
+    call->add_option("args", args);
+    call->callback([&]() {
+      std::vector<msgpack::object> args_o;
 
-    auto zone = std::make_unique<msgpack::zone>();
-    for (auto &arg : args)
-      args_o.emplace_back(json_str_to_msgpack(arg, *zone));
+      auto zone = std::make_unique<msgpack::zone>();
+      for (auto &arg : args)
+        args_o.emplace_back(json_str_to_msgpack(arg, *zone));
 
-    ESHETClient client(get_host_port());
-    Channel<Result> call_result;
-    client.action_call_pack(path, call_result, args_o);
-    auto res = call_result.read();
-    client.exit();
+      ESHETClient client(get_host_port());
+      Channel<Result> call_result;
+      client.action_call_pack(path, call_result, args_o);
+      auto res = call_result.read();
+      client.exit();
 
-    return std::visit([](auto &r) { return handle_result(r); }, res);
-  });
+      std::visit([](const auto &r) { show_result(r); }, res);
+      return 0;
+    });
+  }
+
+  {
+    std::string path;
+    CLI::App *listen = app.add_subcommand("listen", "listen to an event");
+    listen->add_option("path", path)->required();
+    listen->callback([&]() {
+      ESHETClient client(get_host_port());
+
+      Channel<msgpack::object_handle> events;
+
+      Channel<Result> listen_result;
+      client.event_listen(path, events, listen_result);
+      Result res = listen_result.read();
+      std::visit([](const auto &r) { return check_result(r); }, res);
+
+      while (1)
+        std::cout << events.read().get() << std::endl;
+
+      return 0;
+    });
+  }
+
+  {
+    std::string path;
+    CLI::App *listen = app.add_subcommand("observe", "observe a state");
+    listen->add_option("path", path)->required();
+    listen->callback([&]() {
+      ESHETClient client(get_host_port());
+
+      Channel<StateResult> result_chan;
+      Channel<StateUpdate> changed_chan;
+
+      client.state_observe(path, result_chan, changed_chan);
+      std::visit([](const auto &r) { return show_result(r); },
+                 result_chan.read());
+
+      while (1)
+        std::visit([](const auto &r) { return show_result(r); },
+                   changed_chan.read());
+      return 0;
+    });
+  }
 
   app.require_subcommand(1);
 
