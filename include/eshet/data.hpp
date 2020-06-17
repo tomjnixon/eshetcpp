@@ -15,13 +15,13 @@ template <typename Base> struct HasMsgpackObject {
     value.set(msgpack::object(std::move(t)));
   }
 
-  template <typename T> T as() {
+  template <typename T> T as() const {
     T v;
     value.get().convert(v);
     return v;
   }
 
-  template <typename T> void convert(T v) { value.get().convert(v); }
+  template <typename T> void convert(T v) const { value.get().convert(v); }
 
   bool operator==(const HasMsgpackObject<Base> &other) const {
     return value.get() == other.value.get();
