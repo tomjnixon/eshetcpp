@@ -171,6 +171,10 @@ struct SendBuf {
     write_path_pack(0x31, id, path, value);
   }
 
+  void write_event_listen(uint16_t id, const std::string &path) {
+    write_path(0x32, id, path);
+  }
+
   void write_ping(uint16_t id) {
     start_msg(0x09);
     write16(id);

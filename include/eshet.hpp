@@ -88,6 +88,12 @@ public:
     on_command.emplace(EventEmit{path, result_chan, std::move(oh)});
   }
 
+  void event_listen(std::string path,
+                    Channel<msgpack::object_handle> event_chan,
+                    Channel<Result> result_chan) {
+    on_command.emplace(EventListen{path, result_chan, event_chan});
+  }
+
   void test_disconnect() { on_command.emplace(Disconnect{}); }
 
   // disconnect and stop the threads. It's not necessary to call this, but it
@@ -324,6 +330,15 @@ private:
         return false;
     }
 
+    for (auto &event : listened_events) {
+      uint16_t id = get_id();
+      const std::string &path = event.first;
+      send_buf.write_event_listen(id, path);
+      send_send_buf();
+      if (!check_success(id, path))
+        return false;
+    }
+
     return true;
   }
 
@@ -471,6 +486,18 @@ private:
       c.send_send_buf();
     }
 
+    void operator()(EventListen cmd) {
+      uint16_t id = c.get_id();
+      c.reply_channels.emplace(id, std::move(cmd.result_chan));
+
+      auto it = c.listened_events
+                    .emplace(std::move(cmd.path), std::move(cmd.event_chan))
+                    .first;
+
+      c.send_buf.write_event_listen(id, it->first);
+      c.send_send_buf();
+    }
+
     void operator()(Ping cmd) {
       uint16_t id = c.get_id();
       c.reply_channels.emplace(id, std::move(cmd.result_chan));
@@ -542,6 +569,20 @@ private:
         throw ProtocolError();
 
       it->second.emplace(connection_id, id, std::move(oh), on_reply);
+    } break;
+    case 0x33: {
+      // {event_notify, Path, Msg}
+      std::string path;
+      msgpack::object_handle oh;
+      std::tie(path, oh) =
+          parse(&msg[1], msg.size() - 1, read_string, read_msgpack);
+
+      auto it = listened_events.find(path);
+      if (it == listened_events.end())
+        // unknown event
+        throw ProtocolError();
+
+      it->second.emplace(std::move(oh));
     } break;
     case 0x44: {
       // {state_changed, Path, {known, State}}
@@ -621,6 +662,7 @@ private:
   std::map<std::string, Channel<StateUpdate>> observed_states;
 
   std::set<std::string> registered_events;
+  std::map<std::string, Channel<msgpack::object_handle>> listened_events;
 
   Channel<Command> on_command;
   Channel<std::tuple<uint16_t, uint16_t, Result>> on_reply;

@@ -47,14 +47,20 @@ struct EventEmit {
   msgpack::object_handle value;
 };
 
+struct EventListen {
+  std::string path;
+  Channel<Result> result_chan;
+  Channel<msgpack::object_handle> event_chan;
+};
+
 struct Ping {
   Channel<Result> result_chan;
 };
 
 struct Disconnect {};
 
-using Command =
-    std::variant<ActionCall, ActionRegister, StateRegister, StateChanged,
-                 StateObserve, EventRegister, EventEmit, Ping, Disconnect>;
+using Command = std::variant<ActionCall, ActionRegister, StateRegister,
+                             StateChanged, StateObserve, EventRegister,
+                             EventEmit, EventListen, Ping, Disconnect>;
 } // namespace detail
 } // namespace eshet
