@@ -31,7 +31,7 @@ public:
 
     std::vector<uint8_t> message(buffer.data() + 3, buffer.data() + 3 + length);
 
-    for (int i = length + 3; i < buffer.size(); i++)
+    for (size_t i = length + 3; i < buffer.size(); i++)
       buffer[i - (length + 3)] = buffer[i];
     buffer.resize(buffer.size() - (length + 3));
 
