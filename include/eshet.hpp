@@ -4,6 +4,7 @@
 #include "eshet/commands.hpp"
 #include "eshet/data.hpp"
 #include "eshet/log.hpp"
+#include "eshet/msgpack_to_string.hpp"
 #include "eshet/unpack.hpp"
 #include "eshet/util.hpp"
 #include <string>
@@ -379,22 +380,25 @@ private:
     }
   }
 
-  struct CheckResultSuccessVisitor {
+  struct CheckResultBase {
     ESHETClientActor &c;
     const std::string &path;
 
-    bool operator()(const Success &s) { return true; }
     bool operator()(const Error &e) {
-      std::stringstream error_msg;
-      error_msg << "error while adding " << path << ": " << e.value.get();
-      c.log.error(error_msg.str());
+      std::string error_msg = "error while adding " + path + ": ";
+      append_msgpack(error_msg, e.value.get());
+      c.log.error(error_msg);
       return false;
     }
   };
 
-  struct HandleStateReplyVisitor {
-    ESHETClientActor &c;
-    const std::string &path;
+  struct CheckResultSuccessVisitor : public CheckResultBase {
+    using CheckResultBase::operator();
+    bool operator()(const Success &s) { return true; }
+  };
+
+  struct HandleStateReplyVisitor : public CheckResultBase {
+    using CheckResultBase::operator();
     Channel<StateUpdate> &channel;
 
     bool operator()(Known s) {
@@ -404,12 +408,6 @@ private:
     bool operator()(Unknown s) {
       channel.push(std::move(s));
       return true;
-    }
-    bool operator()(const Error &e) {
-      std::stringstream error_msg;
-      error_msg << "error while adding " << path << ": " << e.value.get();
-      c.log.error(error_msg.str());
-      return false;
     }
   };
 
