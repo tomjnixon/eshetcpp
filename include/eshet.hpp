@@ -28,17 +28,17 @@ class ESHETClientActor : public Actor {
   using time_point = std::chrono::time_point<clock>;
 
 public:
-  ESHETClientActor(const std::string &hostname, int port,
-                   std::optional<msgpack::object_handle> id = {},
-                   TimeoutConfig timeout_config = {})
+  explicit ESHETClientActor(const std::string &hostname, int port,
+                            std::optional<msgpack::object_handle> id = {},
+                            TimeoutConfig timeout_config = {})
       : hostname(hostname), port(port), id(std::move(id)),
         timeout_config(std::move(timeout_config)), ping_result(*this),
         should_exit(*this), on_message(*this), on_close(*this),
         on_command(*this), on_reply(*this), send_buf(128) {}
 
-  ESHETClientActor(const std::pair<std::string, int> &hostport,
-                   std::optional<msgpack::object_handle> id = {},
-                   TimeoutConfig timeout_config = {})
+  explicit ESHETClientActor(const std::pair<std::string, int> &hostport,
+                            std::optional<msgpack::object_handle> id = {},
+                            TimeoutConfig timeout_config = {})
       : ESHETClientActor(hostport.first, hostport.second, std::move(id),
                          std::move(timeout_config)) {}
 

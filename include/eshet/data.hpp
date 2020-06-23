@@ -8,10 +8,11 @@ namespace eshet {
 using namespace actorpp;
 template <typename Base> struct HasMsgpackObject {
   msgpack::object_handle value;
-  HasMsgpackObject(msgpack::object_handle value) : value(std::move(value)) {}
-  HasMsgpackObject() {}
+  explicit HasMsgpackObject(msgpack::object_handle value)
+      : value(std::move(value)) {}
+  explicit HasMsgpackObject() {}
 
-  template <typename T> HasMsgpackObject(T t) {
+  template <typename T> explicit HasMsgpackObject(T t) {
     value.set(msgpack::object(std::move(t)));
   }
 
@@ -81,8 +82,9 @@ struct Call : public HasMsgpackObject<Call> {
   uint16_t connection_id;
   uint16_t id;
 
-  Call(uint16_t connection_id, uint16_t id, msgpack::object_handle args,
-       Channel<std::tuple<uint16_t, uint16_t, Result>> reply_chan)
+  explicit Call(uint16_t connection_id, uint16_t id,
+                msgpack::object_handle args,
+                Channel<std::tuple<uint16_t, uint16_t, Result>> reply_chan)
       : HasMsgpackObject<Call>(std::move(args)), connection_id(connection_id),
         id(id), reply_chan(reply_chan) {}
 
