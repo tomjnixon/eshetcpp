@@ -30,7 +30,6 @@ public:
 
 private:
   Channel<Call> action_chan;
-  Channel<Result> result_chan;
   Channel<bool> exit_chan;
 };
 
