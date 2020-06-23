@@ -1,5 +1,5 @@
 #pragma once
-#include <iostream>
+#include <cstdio>
 #include <memory>
 #include <mutex>
 
@@ -7,10 +7,10 @@ namespace eshet {
 
 struct LogCallbacks {
   virtual void debug(const std::string &s) {
-    std::cerr << "eshet: " << s << std::endl;
+    fprintf(stderr, "eshet: %s\n", s.c_str());
   }
   virtual void error(const std::string &s) {
-    std::cerr << "eshet: " << s << std::endl;
+    fprintf(stderr, "eshet: %s\n", s.c_str());
   }
 
   virtual ~LogCallbacks() {}
