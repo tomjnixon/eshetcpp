@@ -1,5 +1,6 @@
 #pragma once
 #include "actorpp/actor.hpp"
+#include "eshet/msgpack_to_string.hpp"
 #include "msgpack.hpp"
 #include <functional>
 #include <variant>
@@ -49,9 +50,9 @@ struct Error : public HasMsgpackObject<Error>, public std::exception {
 
   const char *what() const throw() {
     if (!error_str.size()) {
-      std::ostringstream stream;
-      stream << "Error(" << value.get() << ")";
-      error_str = stream.str();
+      error_str += "Error(";
+      append_msgpack(error_str, value.get());
+      error_str += ")";
     }
     return error_str.c_str();
   }
