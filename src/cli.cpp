@@ -3,6 +3,7 @@
 #include "rapidjson/document.h"
 #include "rapidjson/error/en.h"
 #include "utils.hpp"
+#include <iostream>
 #include <sstream>
 #include <string>
 

@@ -1,5 +1,6 @@
 #include "eshet.hpp"
 #include "utils.hpp"
+#include <iostream>
 #include <sstream>
 #include <string>
 
