@@ -7,6 +7,16 @@
 
 namespace eshet {
 using namespace actorpp;
+
+/// convert an arbitrary value to an object_handle with a zone; this is
+/// required if T corresponds to MessegePack format str, bin, ext, array, or
+/// map. We should avoid using this automatically as it results in an
+/// extra allocation compared to just constructing a msgpack::object
+template <typename T> msgpack::object_handle oh_with_zone(const T &value) {
+  std::unique_ptr<msgpack::zone> z = std::make_unique<msgpack::zone>();
+  return msgpack::object_handle(msgpack::object(value, *z), std::move(z));
+}
+
 template <typename Base> struct HasMsgpackObject {
   msgpack::object_handle value;
   explicit HasMsgpackObject(msgpack::object_handle value)
