@@ -16,10 +16,16 @@ std::pair<std::string, std::string> split_path(std::string path) {
   return {dir_part, last_part};
 }
 
+void error(const std::string &msg) {
+  std::cerr << msg << std::endl;
+  exit(1);
+}
+
 int main(int argc, char **argv) {
   ESHETClient client(get_host_port());
 
-  assert(argc >= 3);
+  if (argc < 3)
+    error("expected three arguments");
   std::string word = argv[2];
 
   std::string dir_part, prefix;
@@ -40,8 +46,10 @@ int main(int argc, char **argv) {
     return 1;
 
   // expect ["dir", entries], where each entry is [type, name]
-  assert(res_mp.via.array.size == 2);
-  assert(res_mp.via.array.ptr[0].as<std::string>() == "dir");
+  if (res_mp.via.array.size != 2)
+    error("expected result to be a pair");
+  if (res_mp.via.array.ptr[0].as<std::string>() != "dir")
+    error("expected type to be \"dir\"");
 
   auto entries = res_mp.via.array.ptr[1]
                      .as<std::vector<std::pair<std::string, std::string>>>();

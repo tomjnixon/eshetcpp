@@ -42,7 +42,7 @@ msgpack::object json_to_msgpack(const rj::Value &v, msgpack::zone &zone) {
                                       json_to_msgpack(entry.value, zone)));
     return msgpack::object(vec, zone);
   } else {
-    assert(false);
+    throw std::logic_error("unknown type");
   }
 
   return {};

@@ -219,7 +219,8 @@ private:
       recv_thread.reset();
     }
     if (sockfd != -1) {
-      assert(close(sockfd) == 0);
+      if (close(sockfd) != 0)
+        throw std::runtime_error("close(sockfd) failed");
       sockfd = -1;
     }
 
@@ -256,7 +257,8 @@ private:
           handle_hello_message(*message);
 
           // no reason for the server to have sent us any more messages here
-          assert(!unpacker.read());
+          if (unpacker.read())
+            throw ProtocolError();
           return true;
         }
       } break;
