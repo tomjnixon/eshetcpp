@@ -181,6 +181,15 @@ struct SendBuf {
     write_size();
   }
 
+  void write_get(uint16_t id, const std::string &path) {
+    write_path(0x23, id, path);
+  }
+
+  void write_set(uint16_t id, const std::string &path,
+                 const msgpack::object &value) {
+    write_path_pack(0x24, id, path, value);
+  }
+
   msgpack::sbuffer sbuf;
 };
 

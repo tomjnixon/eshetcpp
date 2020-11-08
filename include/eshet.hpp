@@ -95,6 +95,17 @@ public:
     on_command.emplace(EventListen{path, result_chan, event_chan});
   }
 
+  void get(std::string path, Channel<Result> result_chan) {
+    on_command.emplace(Get{std::move(path), std::move(result_chan)});
+  }
+
+  template <typename T>
+  void set(std::string path, const T &value, Channel<Result> result_chan) {
+    std::unique_ptr<msgpack::zone> z = std::make_unique<msgpack::zone>();
+    msgpack::object_handle oh(msgpack::object(value, *z), std::move(z));
+    on_command.emplace(Set{std::move(path), std::move(result_chan), std::move(oh)});
+  }
+
   void test_disconnect() { on_command.emplace(Disconnect{}); }
 
   // disconnect and stop the threads. It's not necessary to call this, but it
@@ -495,6 +506,22 @@ private:
                     .first;
 
       c.send_buf.write_event_listen(id, it->first);
+      c.send_send_buf();
+    }
+
+    void operator()(Get cmd) {
+      uint16_t id = c.get_id();
+      c.reply_channels.emplace(id, std::move(cmd.result_chan));
+
+      c.send_buf.write_get(id, cmd.path);
+      c.send_send_buf();
+    }
+
+    void operator()(Set cmd) {
+      uint16_t id = c.get_id();
+      c.reply_channels.emplace(id, std::move(cmd.result_chan));
+
+      c.send_buf.write_set(id, cmd.path, *cmd.value);
       c.send_send_buf();
     }
 
