@@ -150,6 +150,43 @@ int main(int argc, char **argv) {
     });
   }
 
+  {
+    std::string path;
+    CLI::App *get =
+        app.add_subcommand("get", "get the value of a state or property");
+    get->add_option("path", path)->required();
+    get->callback([&]() {
+      ESHETClient client(get_host_port());
+      Channel<Result> result;
+
+      client.get(path, result);
+      std::visit([](const auto &r) { return show_result(r); }, result.read());
+
+      return 0;
+    });
+  }
+
+  {
+    std::string path;
+    std::string value_str;
+    CLI::App *get =
+        app.add_subcommand("set", "set the value of a state or property");
+    get->add_option("path", path)->required();
+    get->add_option("value", value_str)->required();
+    get->callback([&]() {
+      auto zone = std::make_unique<msgpack::zone>();
+      msgpack::object value = json_str_to_msgpack(value_str, *zone);
+
+      ESHETClient client(get_host_port());
+      Channel<Result> result;
+
+      client.set(path, std::move(value), result);
+      std::visit([](const auto &r) { return show_result(r); }, result.read());
+
+      return 0;
+    });
+  }
+
   app.require_subcommand(1);
 
   try {
