@@ -152,7 +152,7 @@ struct SendBuf {
   }
 
   void write_state_observe(uint16_t id, const std::string &path) {
-    write_path(0x43, id, path);
+    write_path(0x46, id, path);
   }
 
   void write_state_changed(uint16_t id, const std::string &path,
