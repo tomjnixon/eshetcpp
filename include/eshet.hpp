@@ -103,7 +103,8 @@ public:
   void set(std::string path, const T &value, Channel<Result> result_chan) {
     std::unique_ptr<msgpack::zone> z = std::make_unique<msgpack::zone>();
     msgpack::object_handle oh(msgpack::object(value, *z), std::move(z));
-    on_command.emplace(Set{std::move(path), std::move(result_chan), std::move(oh)});
+    on_command.emplace(
+        Set{std::move(path), std::move(result_chan), std::move(oh)});
   }
 
   void test_disconnect() { on_command.emplace(Disconnect{}); }
