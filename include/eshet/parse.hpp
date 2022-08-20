@@ -15,6 +15,14 @@ std::pair<uint16_t, size_t> read16(const uint8_t *data, size_t size) {
   return {((uint16_t)data[0] << 8) + data[1], 2};
 }
 
+std::pair<uint32_t, size_t> read32(const uint8_t *data, size_t size) {
+  if (size < 2)
+    throw ProtocolError();
+  uint32_t value = ((uint32_t)data[0] << 24) + ((uint32_t)data[1] << 16) +
+                   ((uint32_t)data[2] << 8) + data[3];
+  return {value, 4};
+}
+
 std::pair<std::string, size_t> read_string(const uint8_t *data, size_t size) {
   size_t length;
   for (length = 0; length < size; length++)

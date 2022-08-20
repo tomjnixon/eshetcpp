@@ -8,6 +8,8 @@
 namespace eshet {
 using namespace actorpp;
 
+using Time = std::chrono::duration<uint32_t, std::milli>;
+
 /// convert an arbitrary value to an object_handle with a zone; this is
 /// required if T corresponds to MessegePack format str, bin, ext, array, or
 /// map. We should avoid using this automatically as it results in an
@@ -74,13 +76,23 @@ private:
 using Result = std::variant<Success, Error>;
 
 struct Known : public HasMsgpackObject<Known> {
-  using HasMsgpackObject<Known>::HasMsgpackObject;
+  explicit Known() : HasMsgpackObject<Known>(), t_since_change(0) {}
+
+  template <typename T>
+  explicit Known(T &&v, Time t = Time{0})
+      : HasMsgpackObject<Known>(std::forward<T>(v)), t_since_change(t) {}
+
   static constexpr const char *name = "Known";
+  Time t_since_change;
 };
 
 struct Unknown {
+  explicit Unknown(Time t = Time{0}) : t_since_change(t) {}
+
   bool operator==(const Unknown &other) const { return true; }
   bool operator!=(const Unknown &other) const { return !(*this == other); }
+
+  Time t_since_change;
 };
 
 using StateResult = std::variant<Known, Unknown, Error>;

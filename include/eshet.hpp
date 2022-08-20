@@ -583,6 +583,22 @@ private:
       std::tie(id) = parse(&msg[1], msg.size() - 1, read16);
       handle_reply(id, Unknown());
     } break;
+    case 0x0a: {
+      // {reply_state, Id, {known, Msg}, T}
+      uint16_t id;
+      uint32_t t;
+      msgpack::object_handle oh;
+      std::tie(id, t, oh) =
+          parse(&msg[1], msg.size() - 1, read16, read32, read_msgpack);
+      handle_reply(id, Known(std::move(oh), Time{t}));
+    } break;
+    case 0x0b: {
+      // {reply_state, Id, unknown, T}
+      uint16_t id;
+      uint32_t t;
+      std::tie(id, t) = parse(&msg[1], msg.size() - 1, read16, read32);
+      handle_reply(id, Unknown(Time(t)));
+    } break;
     case 0x11: {
       // {action_call, Id, Path, Msg}
       uint16_t id;
