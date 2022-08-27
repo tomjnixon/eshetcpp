@@ -3,58 +3,69 @@
 
 namespace eshet {
 namespace detail {
-std::pair<uint8_t, size_t> read8(const uint8_t *data, size_t size) {
-  if (size < 1)
-    throw ProtocolError();
-  return {data[0], 1};
-}
 
-std::pair<uint16_t, size_t> read16(const uint8_t *data, size_t size) {
-  if (size < 2)
-    throw ProtocolError();
-  return {((uint16_t)data[0] << 8) + data[1], 2};
-}
+class Parser {
+public:
+  Parser(const uint8_t *data, size_t size) : data(data), size(size) {}
 
-std::pair<uint32_t, size_t> read32(const uint8_t *data, size_t size) {
-  if (size < 4)
-    throw ProtocolError();
-  uint32_t value = ((uint32_t)data[0] << 24) + ((uint32_t)data[1] << 16) +
-                   ((uint32_t)data[2] << 8) + data[3];
-  return {value, 4};
-}
+  uint8_t read8() {
+    if (size - pos < 1)
+      throw ProtocolError();
+    return data[pos++];
+  }
 
-std::pair<std::string, size_t> read_string(const uint8_t *data, size_t size) {
-  size_t length;
-  for (length = 0; length < size; length++)
-    if (data[length] == 0)
-      break;
+  uint16_t read16() {
+    if (size - pos < 2)
+      throw ProtocolError();
+    uint16_t value = ((uint16_t)data[pos] << 8) + data[pos + 1];
+    pos += 2;
+    return value;
+  }
 
-  if (length == size)
-    throw ProtocolError();
+  uint32_t read32() {
+    if (size - pos < 4)
+      throw ProtocolError();
+    uint32_t value = ((uint32_t)data[pos] << 24) +
+                     ((uint32_t)data[pos + 1] << 16) +
+                     ((uint32_t)data[pos + 2] << 8) + data[pos + 3];
+    pos += 4;
+    return value;
+  }
 
-  return {std::string((const char *)data, length), length + 1};
-}
+  std::string read_string() {
+    size_t end;
+    for (end = pos; end < size; end++)
+      if (data[end] == 0)
+        break;
 
-std::pair<msgpack::object_handle, size_t> read_msgpack(const uint8_t *data,
-                                                       size_t size) {
-  if (size < 1)
-    throw ProtocolError();
-  return {msgpack::unpack((char *)data, size), size};
-}
+    if (end == size)
+      throw ProtocolError();
 
-std::tuple<> parse(const uint8_t *data, size_t size) {
-  if (size > 0)
-    throw ProtocolError();
-  return std::make_tuple();
-}
+    std::string value{(const char *)data + pos, (const char *)data + end};
+    pos = end + 1;
 
-template <typename CB, typename... CBs>
-auto parse(const uint8_t *data, size_t size, CB cb, CBs... cbs) {
-  auto ret = cb(data, size);
+    return value;
+  }
 
-  return std::tuple_cat(std::make_tuple(std::move(ret.first)),
-                        parse(data + ret.second, size - ret.second, cbs...));
-}
+  msgpack::object_handle read_msgpack() {
+    if (size - pos < 1)
+      throw ProtocolError();
+    msgpack::object_handle value =
+        msgpack::unpack((char *)data + pos, size - pos);
+    pos = size;
+    return value;
+  }
+
+  void check_empty() {
+    if (pos != size)
+      throw ProtocolError();
+  }
+
+private:
+  const uint8_t *data;
+  size_t size;
+  size_t pos = 0;
+};
 
 // hold a buffer for message construction, with operations for writing various
 // types of data

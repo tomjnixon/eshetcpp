@@ -287,11 +287,14 @@ private:
     switch (msg[0]) {
     case 0x03: {
       // {hello}
-      parse(&msg[1], msg.size() - 1);
+      Parser p(&msg[1], msg.size() - 1);
+      p.check_empty();
     } break;
     case 0x04: {
       // {hello_id, ClientID}
-      std::tie(id) = parse(&msg[1], msg.size() - 1, read_msgpack);
+      Parser p(&msg[1], msg.size() - 1);
+      id = p.read_msgpack();
+      p.check_empty();
     } break;
     default:
       throw ProtocolError();
@@ -558,54 +561,59 @@ private:
       throw ProtocolError(); // shouldn't get a hello message
     case 0x05: {
       // {reply, Id, {ok, Msg}}
-      uint16_t id;
-      msgpack::object_handle oh;
-      std::tie(id, oh) = parse(&msg[1], msg.size() - 1, read16, read_msgpack);
+      Parser p(&msg[1], msg.size() - 1);
+      uint16_t id = p.read16();
+      msgpack::object_handle oh = p.read_msgpack();
+      p.check_empty();
       handle_reply(id, Success(std::move(oh)));
     } break;
     case 0x06: {
       // {reply, Id, {error, Msg}}
-      uint16_t id;
-      msgpack::object_handle oh;
-      std::tie(id, oh) = parse(&msg[1], msg.size() - 1, read16, read_msgpack);
+      Parser p(&msg[1], msg.size() - 1);
+      uint16_t id = p.read16();
+      msgpack::object_handle oh = p.read_msgpack();
+      p.check_empty();
       handle_reply(id, Error(std::move(oh)));
     } break;
     case 0x07: {
       // {reply_state, Id, {known, Msg}}
-      uint16_t id;
-      msgpack::object_handle oh;
-      std::tie(id, oh) = parse(&msg[1], msg.size() - 1, read16, read_msgpack);
+      Parser p(&msg[1], msg.size() - 1);
+      uint16_t id = p.read16();
+      msgpack::object_handle oh = p.read_msgpack();
+      p.check_empty();
       handle_reply(id, Known(std::move(oh)));
     } break;
     case 0x08: {
       // {reply_state, Id, unknown}
-      uint16_t id;
-      std::tie(id) = parse(&msg[1], msg.size() - 1, read16);
+      Parser p(&msg[1], msg.size() - 1);
+      uint16_t id = p.read16();
+      p.check_empty();
       handle_reply(id, Unknown());
     } break;
     case 0x0a: {
       // {reply_state, Id, {known, Msg}, T}
-      uint16_t id;
-      uint32_t t;
-      msgpack::object_handle oh;
-      std::tie(id, t, oh) =
-          parse(&msg[1], msg.size() - 1, read16, read32, read_msgpack);
+      Parser p(&msg[1], msg.size() - 1);
+      uint16_t id = p.read16();
+      uint32_t t = p.read32();
+      msgpack::object_handle oh = p.read_msgpack();
+      p.check_empty();
       handle_reply(id, Known(std::move(oh), Time{t}));
     } break;
     case 0x0b: {
       // {reply_state, Id, unknown, T}
-      uint16_t id;
-      uint32_t t;
-      std::tie(id, t) = parse(&msg[1], msg.size() - 1, read16, read32);
+      Parser p(&msg[1], msg.size() - 1);
+      uint16_t id = p.read16();
+      uint32_t t = p.read32();
+      p.check_empty();
       handle_reply(id, Unknown(Time(t)));
     } break;
     case 0x11: {
       // {action_call, Id, Path, Msg}
-      uint16_t id;
-      std::string path;
-      msgpack::object_handle oh;
-      std::tie(id, path, oh) =
-          parse(&msg[1], msg.size() - 1, read16, read_string, read_msgpack);
+      Parser p(&msg[1], msg.size() - 1);
+      uint16_t id = p.read16();
+      std::string path = p.read_string();
+      msgpack::object_handle oh = p.read_msgpack();
+      p.check_empty();
 
       auto it = action_channels.find(path);
       if (it == action_channels.end())
@@ -616,10 +624,10 @@ private:
     } break;
     case 0x33: {
       // {event_notify, Path, Msg}
-      std::string path;
-      msgpack::object_handle oh;
-      std::tie(path, oh) =
-          parse(&msg[1], msg.size() - 1, read_string, read_msgpack);
+      Parser p(&msg[1], msg.size() - 1);
+      std::string path = p.read_string();
+      msgpack::object_handle oh = p.read_msgpack();
+      p.check_empty();
 
       auto it = listened_events.find(path);
       if (it == listened_events.end())
@@ -630,10 +638,10 @@ private:
     } break;
     case 0x44: {
       // {state_changed, Path, {known, State}}
-      std::string path;
-      msgpack::object_handle oh;
-      std::tie(path, oh) =
-          parse(&msg[1], msg.size() - 1, read_string, read_msgpack);
+      Parser p(&msg[1], msg.size() - 1);
+      std::string path = p.read_string();
+      msgpack::object_handle oh = p.read_msgpack();
+      p.check_empty();
 
       auto it = observed_states.find(path);
       if (it == observed_states.end())
@@ -644,8 +652,9 @@ private:
     } break;
     case 0x45: {
       // {state_changed, Path, unknown}
-      std::string path;
-      std::tie(path) = parse(&msg[1], msg.size() - 1, read_string);
+      Parser p(&msg[1], msg.size() - 1);
+      std::string path = p.read_string();
+      p.check_empty();
 
       auto it = observed_states.find(path);
       if (it == observed_states.end())

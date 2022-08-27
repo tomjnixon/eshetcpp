@@ -20,9 +20,11 @@ public:
     if (buffer.size() < 3)
       return std::nullopt;
 
-    uint8_t magic;
-    uint16_t length;
-    std::tie(magic, length) = parse(buffer.data(), 3, read8, read16);
+    Parser p(buffer.data(), 3);
+    uint8_t magic = p.read8();
+    uint16_t length = p.read16();
+    p.check_empty();
+
     if (magic != 0x47)
       throw ProtocolError();
 
