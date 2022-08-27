@@ -3,7 +3,7 @@
 
 namespace eshet {
 namespace detail {
-std::pair<uint16_t, size_t> read8(const uint8_t *data, size_t size) {
+std::pair<uint8_t, size_t> read8(const uint8_t *data, size_t size) {
   if (size < 1)
     throw ProtocolError();
   return {data[0], 1};
