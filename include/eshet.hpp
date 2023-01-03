@@ -65,20 +65,23 @@ public:
                      Channel<Result> result_chan) {
     std::unique_ptr<msgpack::zone> z = std::make_unique<msgpack::zone>();
     msgpack::object_handle oh(msgpack::object(value, *z), std::move(z));
-    on_command.emplace(StateChanged{path, result_chan, Known{std::move(oh)}});
+    on_command.push(StateChanged{std::move(path), std::move(result_chan),
+                                 Known{std::move(oh)}});
   }
 
   void state_unknown(std::string path, Channel<Result> result_chan) {
-    on_command.emplace(StateChanged{path, result_chan, Unknown{}});
+    on_command.push(
+        StateChanged{std::move(path), std::move(result_chan), Unknown{}});
   }
 
   void state_observe(std::string path, Channel<StateResult> result_chan,
                      Channel<StateUpdate> changed_chan) {
-    on_command.emplace(StateObserve{path, result_chan, changed_chan});
+    on_command.push(StateObserve{std::move(path), std::move(result_chan),
+                                 std::move(changed_chan)});
   }
 
   void event_register(std::string path, Channel<Result> result_chan) {
-    on_command.emplace(EventRegister{path, result_chan});
+    on_command.push(EventRegister{std::move(path), std::move(result_chan)});
   }
 
   template <typename T>
@@ -86,28 +89,30 @@ public:
                   Channel<Result> result_chan) {
     std::unique_ptr<msgpack::zone> z = std::make_unique<msgpack::zone>();
     msgpack::object_handle oh(msgpack::object(value, *z), std::move(z));
-    on_command.emplace(EventEmit{path, result_chan, std::move(oh)});
+    on_command.push(
+        EventEmit{std::move(path), std::move(result_chan), std::move(oh)});
   }
 
   void event_listen(std::string path,
                     Channel<msgpack::object_handle> event_chan,
                     Channel<Result> result_chan) {
-    on_command.emplace(EventListen{path, result_chan, event_chan});
+    on_command.push(EventListen{std::move(path), std::move(result_chan),
+                                std::move(event_chan)});
   }
 
   void get(std::string path, Channel<Result> result_chan) {
-    on_command.emplace(Get{std::move(path), std::move(result_chan)});
+    on_command.push(Get{std::move(path), std::move(result_chan)});
   }
 
   template <typename T>
   void set(std::string path, const T &value, Channel<Result> result_chan) {
     std::unique_ptr<msgpack::zone> z = std::make_unique<msgpack::zone>();
     msgpack::object_handle oh(msgpack::object(value, *z), std::move(z));
-    on_command.emplace(
+    on_command.push(
         Set{std::move(path), std::move(result_chan), std::move(oh)});
   }
 
-  void test_disconnect() { on_command.emplace(Disconnect{}); }
+  void test_disconnect() { on_command.push(Disconnect{}); }
 
   // disconnect and stop the threads. It's not necessary to call this, but it
   // may help the destructor run faster
@@ -241,7 +246,7 @@ private:
     reply_channels.clear();
 
     for (auto &state : observed_states)
-      state.second.emplace(Unknown{});
+      state.second.push(Unknown{});
 
     ping_timeout.reset();
     // make sure to clear this after sending the disconnected messages,
