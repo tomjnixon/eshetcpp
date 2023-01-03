@@ -186,6 +186,53 @@ int main(int argc, char **argv) {
     });
   }
 
+  {
+    std::string path;
+    std::string initial_value_str;
+    CLI::App *listen = app.add_subcommand("publish", "register a state");
+    listen->add_option("path", path)->required();
+    listen->add_option("initial_value", initial_value_str);
+    listen->footer("\nvalues to change to will be read from stdin"
+                   "\ntype 'u' to set to unknown, or 'q' to quit");
+    listen->callback([&]() {
+      ESHETClient client(get_host_port());
+
+      Channel<Result> result_chan;
+
+      client.state_register(path, result_chan);
+      std::visit([](const auto &r) { return check_result(r); },
+                 result_chan.read());
+
+      auto update_str = [&](const std::string &value_str) {
+        auto zone = std::make_unique<msgpack::zone>();
+        msgpack::object value = json_str_to_msgpack(value_str, *zone);
+
+        client.state_changed(path, std::move(value), result_chan);
+        std::visit([](const auto &r) { return check_result(r); },
+                   result_chan.read());
+      };
+
+      if (initial_value_str.size()) {
+        update_str(initial_value_str);
+      }
+
+      std::string line;
+      while (std::getline(std::cin, line)) {
+        if (line.size() && line[0] == 'q')
+          break;
+        else if (line.size() && line[0] == 'u') {
+          client.state_unknown(path, result_chan);
+          std::visit([](const auto &r) { return check_result(r); },
+                     result_chan.read());
+        } else {
+          update_str(line);
+        }
+      }
+
+      return 0;
+    });
+  }
+
   app.require_subcommand(1);
 
   try {
