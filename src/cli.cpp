@@ -83,10 +83,9 @@ void show_result(const Error &r) { check_result(r); }
 int main(int argc, char **argv) {
   CLI::App app{"eshet CLI"};
 
-  CLI::App *call = app.add_subcommand("call", "call an action");
-
   {
     std::string path;
+    CLI::App *call = app.add_subcommand("call", "call an action");
     std::vector<std::string> args;
     call->add_option("path", path)->required();
     call->add_option("args", args);
