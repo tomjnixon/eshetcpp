@@ -7,3 +7,4 @@ target_link_libraries(eshet_complete PRIVATE eshetcpp CLI11 rapidjson)
 include(GNUInstallDirs)
 
 install(TARGETS eshet eshet_complete DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(FILES eshet_complete.bash DESTINATION ${CMAKE_INSTALL_DATADIR})
