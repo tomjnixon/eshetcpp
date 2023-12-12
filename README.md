@@ -1,33 +1,53 @@
 # eshetcpp
 
-eshet client library in C++.
+eshet client library and command-line utility in C++.
 
-## Usage
+This works with [the ESHET server]{https://github.com/tomjnixon/eshetsrv). For
+ESP32 integration, see
+[eshet-esp-idf](https://github.com/tomjnixon/eshet-esp-idf).
 
-The library is header-only and requires C++17, msgpack-c, and the UNIX sockets
-API.
+## build and install
 
-Add `include` to your include path, then:
+First, make sure to clone this repository recursively, or run
 
-```cpp
-#include "eshet.hpp"
-#include <unistd.h>
-
-int main() {
-  ESHETClient client("localhost", 11236);
-
-  client.on_connect([&]() {
-    client.state_register("/state", [&](Result result) {
-      std::cout << "registered: " << result << std::endl;
-    });
-  });
-
-  // wait for the callback and do something with /state here
-  while (true) sleep(1);
-}
+```
+git submodule update --init
 ```
 
-## Development
+Configure and build with:
+
+```
+cmake -G Ninja -B build . -DCMAKE_INSTALL_PREFIX=$HOME/.local
+ninja -C build
+```
+
+The CLI tool can be ran from the build directory (`./build/src/eshet`) or
+installed with:
+
+```
+ninja -C build install
+```
+
+This will install to the path set in `CMAKE_INSTALL_PREFIX`, which should
+contain a `bin` directory on your path.
+
+To enable bash completion, source the installed `eshet_complete.bash` in your
+`.bashrc`:
+
+```bash
+source ~/.local/share/eshet_complete.bash
+```
+
+## CLI usage
+
+See `eshet --help` for a list of commands and `eshet [command] --help` for help
+on each command.
+
+The server to connect to is configured with the `ESHET_SERVER` environment
+variable, which should either contain just a host name (for port 11236), or a
+host name and port number separated by a colon.
+
+## development
 
 Build and test like:
 
