@@ -132,6 +132,7 @@ std::ostream &operator<<(std::ostream &stream, const Unknown &unknown) {
 template <typename T,
           typename = std::enable_if_t<std::is_same<T, Result>::value ||
                                       std::is_same<T, StateResult>::value ||
+                                      std::is_same<T, StateUpdate>::value ||
                                       std::is_same<T, AnyResult>::value>>
 std::ostream &operator<<(std::ostream &stream, const T &result) {
   std::visit([&](const auto &v) { stream << v; }, result);
