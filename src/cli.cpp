@@ -233,6 +233,48 @@ int main(int argc, char **argv) {
     });
   }
 
+  {
+    std::string path;
+    std::string value_to_emit_str;
+    CLI::App *listen = app.add_subcommand("emit", "register an event");
+    listen->add_option("path", path)->required();
+    listen->add_option("value_to_emit", value_to_emit_str);
+    listen->footer("\nvalues to emit to will be read from stdin if"
+                   "\nvalue_to_emit is not provided; type 'q' to quit");
+    listen->callback([&]() {
+      ESHETClient client(get_host_port());
+
+      Channel<Result> result_chan;
+
+      client.event_register(path, result_chan);
+      std::visit([](const auto &r) { return check_result(r); },
+                 result_chan.read());
+
+      auto emit_str = [&](const std::string &value_str) {
+        auto zone = std::make_unique<msgpack::zone>();
+        msgpack::object value = json_str_to_msgpack(value_str, *zone);
+
+        client.event_emit(path, std::move(value), result_chan);
+        std::visit([](const auto &r) { return check_result(r); },
+                   result_chan.read());
+      };
+
+      if (value_to_emit_str.size()) {
+        emit_str(value_to_emit_str);
+      } else {
+        // unlike with publish, it makes sense to emit a value then exit
+        std::string line;
+        while (std::getline(std::cin, line))
+          if (line.size() && line[0] == 'q')
+            break;
+          else
+            emit_str(line);
+      }
+
+      return 0;
+    });
+  }
+
   app.require_subcommand(1);
 
   try {
