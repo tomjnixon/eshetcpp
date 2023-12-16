@@ -1,3 +1,5 @@
+.. _eshetcpp_home:
+
 eshetcpp Documentation
 ======================
 
