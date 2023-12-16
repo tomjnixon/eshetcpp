@@ -92,6 +92,13 @@ int main(int argc, char **argv) {
     call->callback([&]() {
       std::vector<msgpack::object> args_o;
 
+      // XXX: i can't figure out how to get CLI11 to not have a default value
+      // for this, without triggering a bug where the previous option (i.e. the
+      // path) gets added to args -- so remove the default manually -- it's not
+      // valid anyway
+      if (args.size() == 1 && args[0] == "")
+        args.pop_back();
+
       auto zone = std::make_unique<msgpack::zone>();
       for (auto &arg : args)
         args_o.emplace_back(json_str_to_msgpack(arg, *zone));
