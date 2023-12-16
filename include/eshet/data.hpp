@@ -36,7 +36,9 @@ template <typename Base> struct HasMsgpackObject {
   }
 
   template <typename T> void convert(T &v) const { value.get().convert(v); }
-  template <typename... Ts> void convert(std::tuple<Ts &...> v) const { value.get().convert(v); }
+  template <typename... Ts> void convert(std::tuple<Ts &...> v) const {
+    value.get().convert(v);
+  }
 
   bool operator==(const HasMsgpackObject<Base> &other) const {
     return value.get() == other.value.get();
