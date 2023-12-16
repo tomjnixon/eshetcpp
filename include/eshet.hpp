@@ -55,16 +55,18 @@ public:
                         const T &args) {
     std::unique_ptr<msgpack::zone> z = std::make_unique<msgpack::zone>();
     msgpack::object_handle oh(msgpack::object(args, *z), std::move(z));
-    on_command.emplace(ActionCall{path, result_chan, std::move(oh)});
+    on_command.emplace(
+        ActionCall{std::move(path), std::move(result_chan), std::move(oh)});
   }
 
   void action_register(std::string path, Channel<Result> result_chan,
                        Channel<Call> call_chan) {
-    on_command.emplace(ActionRegister{path, result_chan, call_chan});
+    on_command.emplace(ActionRegister{std::move(path), std::move(result_chan),
+                                      std::move(call_chan)});
   }
 
   void state_register(std::string path, Channel<Result> result_chan) {
-    on_command.emplace(StateRegister{path, result_chan});
+    on_command.emplace(StateRegister{std::move(path), std::move(result_chan)});
   }
 
   template <typename T>
@@ -377,7 +379,8 @@ private:
   bool check_success(uint16_t id, const std::string &path) {
     auto reply = wait_for_reply<Result>(id);
     if (reply)
-      return std::visit(CheckResultSuccessVisitor{*this, path}, *reply);
+      return std::visit(CheckResultSuccessVisitor{*this, path},
+                        std::move(*reply));
     else
       return false;
   }
