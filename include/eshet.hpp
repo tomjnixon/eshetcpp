@@ -13,17 +13,24 @@ namespace eshet {
 using namespace actorpp;
 
 struct TimeoutConfig {
-  // send a ping if we haven't sent anything for this long
+  /// send a ping if we haven't sent anything for this long
   std::chrono::seconds idle_ping{15};
-  // tell the server to time out if it hasn't received a message for this long;
-  // must be more than idle_ping
+  /// tell the server to time out if it hasn't received a message for this long;
+  /// must be more than idle_ping
   std::chrono::seconds server_timeout{30};
-  // how long to wait for a ping before assuming the connection is dead
+  /// how long to wait for a ping before assuming the connection is dead
   std::chrono::seconds ping_timeout{5};
 };
 
 namespace detail {
 
+/// ESHET client
+///
+/// Methods of this class can be safely called from any thread, so many actors
+/// can share a client connection.
+///
+/// Generally, methods return immediately, and ultimately push their result
+/// onto the provided result_chan.
 class ESHETClientActor : public Actor {
   using clock = std::chrono::steady_clock;
   using time_point = std::chrono::time_point<clock>;
