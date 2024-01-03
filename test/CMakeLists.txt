@@ -18,3 +18,6 @@ add_eshetcpp_test(test_action)
 add_eshetcpp_test(test_state)
 add_eshetcpp_test(test_event)
 add_eshetcpp_test(test_msgpack)
+
+add_eshetcpp_test(test_cli)
+target_compile_definitions(test_cli PRIVATE "ESHET_BIN=\"$<TARGET_FILE:eshet>\"")
