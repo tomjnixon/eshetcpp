@@ -84,14 +84,10 @@ int main(int argc, char **argv) {
   CLI::App app{"eshet CLI"};
 
   {
-    std::string path;
     CLI::App *call = app.add_subcommand("call", "call an action");
     std::vector<std::string> args;
-    call->add_option("path", path)->required();
-    call->add_option("args", args);
+    call->add_option("path_args", args, "path to call followed by arguments");
     call->callback([&]() {
-      std::vector<msgpack::object> args_o;
-
       // XXX: i can't figure out how to get CLI11 to not have a default value
       // for this, without triggering a bug where the previous option (i.e. the
       // path) gets added to args -- so remove the default manually -- it's not
@@ -99,9 +95,17 @@ int main(int argc, char **argv) {
       if (args.size() == 1 && args[0] == "")
         args.pop_back();
 
+      if (args.size() == 0) {
+        std::cerr << "expected a path\n";
+        return 1;
+      }
+
+      std::string path = std::move(args[0]);
+
+      std::vector<msgpack::object> args_o;
       auto zone = std::make_unique<msgpack::zone>();
-      for (auto &arg : args)
-        args_o.emplace_back(json_str_to_msgpack(arg, *zone));
+      for (size_t i = 1; i < args.size(); i++)
+        args_o.emplace_back(json_str_to_msgpack(args[i], *zone));
 
       ESHETClient client(get_host_port());
       Channel<Result> call_result;
