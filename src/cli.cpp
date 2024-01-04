@@ -83,197 +83,186 @@ void show_result(const Error &r) { check_result(r); }
 int main(int argc, char **argv) {
   CLI::App app{"eshet CLI"};
 
-  {
-    std::string path;
-    CLI::App *call = app.add_subcommand("call", "call an action");
-    std::vector<std::string> args;
-    call->add_option("path", path)->required();
-    call->add_option("args", args);
-    call->callback([&]() {
-      std::vector<msgpack::object> args_o;
+  // shared args
+  std::string path;
 
-      auto zone = std::make_unique<msgpack::zone>();
-      for (auto &arg : args)
-        args_o.emplace_back(json_str_to_msgpack(arg, *zone));
+  // call
+  CLI::App *call = app.add_subcommand("call", "call an action");
+  call->add_option("path", path)->required();
+  std::vector<std::string> args;
+  call->add_option("args", args);
+  call->callback([&]() {
+    std::vector<msgpack::object> args_o;
 
-      ESHETClient client(get_host_port());
-      Channel<Result> call_result;
-      client.action_call_pack(path, call_result, args_o);
-      auto res = call_result.read();
-      client.exit();
+    auto zone = std::make_unique<msgpack::zone>();
+    for (auto &arg : args)
+      args_o.emplace_back(json_str_to_msgpack(arg, *zone));
 
-      std::visit([](const auto &r) { show_result(r); }, res);
-      return 0;
-    });
-  }
+    ESHETClient client(get_host_port());
+    Channel<Result> call_result;
+    client.action_call_pack(path, call_result, args_o);
+    auto res = call_result.read();
+    client.exit();
 
-  {
-    std::string path;
-    CLI::App *listen = app.add_subcommand("listen", "listen to an event");
-    listen->add_option("path", path)->required();
-    listen->callback([&]() {
-      ESHETClient client(get_host_port());
+    std::visit([](const auto &r) { show_result(r); }, res);
+    return 0;
+  });
 
-      Channel<msgpack::object_handle> events;
+  // listen
+  CLI::App *listen = app.add_subcommand("listen", "listen to an event");
+  listen->add_option("path", path)->required();
+  listen->callback([&]() {
+    ESHETClient client(get_host_port());
 
-      Channel<Result> listen_result;
-      client.event_listen(path, events, listen_result);
-      Result res = listen_result.read();
-      std::visit([](const auto &r) { return check_result(r); }, res);
+    Channel<msgpack::object_handle> events;
 
-      while (1)
-        std::cout << events.read().get() << std::endl;
+    Channel<Result> listen_result;
+    client.event_listen(path, events, listen_result);
+    Result res = listen_result.read();
+    std::visit([](const auto &r) { return check_result(r); }, res);
 
-      return 0;
-    });
-  }
+    while (1)
+      std::cout << events.read().get() << std::endl;
 
-  {
-    std::string path;
-    CLI::App *listen = app.add_subcommand("observe", "observe a state");
-    listen->add_option("path", path)->required();
-    listen->callback([&]() {
-      ESHETClient client(get_host_port());
+    return 0;
+  });
 
-      Channel<StateResult> result_chan;
-      Channel<StateUpdate> changed_chan;
+  // observe
+  CLI::App *observe = app.add_subcommand("observe", "observe a state");
+  observe->add_option("path", path)->required();
+  observe->callback([&]() {
+    ESHETClient client(get_host_port());
 
-      client.state_observe(path, result_chan, changed_chan);
+    Channel<StateResult> result_chan;
+    Channel<StateUpdate> changed_chan;
+
+    client.state_observe(path, result_chan, changed_chan);
+    std::visit([](const auto &r) { return show_result(r); },
+               result_chan.read());
+
+    while (1)
       std::visit([](const auto &r) { return show_result(r); },
-                 result_chan.read());
+                 changed_chan.read());
+    return 0;
+  });
 
-      while (1)
-        std::visit([](const auto &r) { return show_result(r); },
-                   changed_chan.read());
-      return 0;
-    });
-  }
+  // get
+  CLI::App *get =
+      app.add_subcommand("get", "get the value of a state or property");
+  get->add_option("path", path)->required();
+  get->callback([&]() {
+    ESHETClient client(get_host_port());
+    Channel<Result> result;
 
-  {
-    std::string path;
-    CLI::App *get =
-        app.add_subcommand("get", "get the value of a state or property");
-    get->add_option("path", path)->required();
-    get->callback([&]() {
-      ESHETClient client(get_host_port());
-      Channel<Result> result;
+    client.get(path, result);
+    std::visit([](const auto &r) { return show_result(r); }, result.read());
 
-      client.get(path, result);
-      std::visit([](const auto &r) { return show_result(r); }, result.read());
+    return 0;
+  });
 
-      return 0;
-    });
-  }
+  // set
+  CLI::App *set =
+      app.add_subcommand("set", "set the value of a state or property");
+  set->add_option("path", path)->required();
+  std::string value_str;
+  set->add_option("value", value_str)->required();
+  set->callback([&]() {
+    auto zone = std::make_unique<msgpack::zone>();
+    msgpack::object value = json_str_to_msgpack(value_str, *zone);
 
-  {
-    std::string path;
-    std::string value_str;
-    CLI::App *get =
-        app.add_subcommand("set", "set the value of a state or property");
-    get->add_option("path", path)->required();
-    get->add_option("value", value_str)->required();
-    get->callback([&]() {
+    ESHETClient client(get_host_port());
+    Channel<Result> result;
+
+    client.set(path, std::move(value), result);
+    std::visit([](const auto &r) { return show_result(r); }, result.read());
+
+    return 0;
+  });
+
+  // publish
+  CLI::App *publish = app.add_subcommand("publish", "register a state");
+  publish->add_option("path", path)->required();
+  std::string initial_value_str;
+  publish->add_option("initial_value", initial_value_str);
+  publish->footer("\nvalues to change to will be read from stdin"
+                  "\ntype 'u' to set to unknown, or 'q' to quit");
+  publish->callback([&]() {
+    ESHETClient client(get_host_port());
+
+    Channel<Result> result_chan;
+
+    client.state_register(path, result_chan);
+    std::visit([](const auto &r) { return check_result(r); },
+               result_chan.read());
+
+    auto update_str = [&](const std::string &value_str) {
       auto zone = std::make_unique<msgpack::zone>();
       msgpack::object value = json_str_to_msgpack(value_str, *zone);
 
-      ESHETClient client(get_host_port());
-      Channel<Result> result;
-
-      client.set(path, std::move(value), result);
-      std::visit([](const auto &r) { return show_result(r); }, result.read());
-
-      return 0;
-    });
-  }
-
-  {
-    std::string path;
-    std::string initial_value_str;
-    CLI::App *listen = app.add_subcommand("publish", "register a state");
-    listen->add_option("path", path)->required();
-    listen->add_option("initial_value", initial_value_str);
-    listen->footer("\nvalues to change to will be read from stdin"
-                   "\ntype 'u' to set to unknown, or 'q' to quit");
-    listen->callback([&]() {
-      ESHETClient client(get_host_port());
-
-      Channel<Result> result_chan;
-
-      client.state_register(path, result_chan);
+      client.state_changed(path, std::move(value), result_chan);
       std::visit([](const auto &r) { return check_result(r); },
                  result_chan.read());
+    };
 
-      auto update_str = [&](const std::string &value_str) {
-        auto zone = std::make_unique<msgpack::zone>();
-        msgpack::object value = json_str_to_msgpack(value_str, *zone);
+    if (initial_value_str.size()) {
+      update_str(initial_value_str);
+    }
 
-        client.state_changed(path, std::move(value), result_chan);
+    std::string line;
+    while (std::getline(std::cin, line)) {
+      if (line.size() && line[0] == 'q')
+        break;
+      else if (line.size() && line[0] == 'u') {
+        client.state_unknown(path, result_chan);
         std::visit([](const auto &r) { return check_result(r); },
                    result_chan.read());
-      };
-
-      if (initial_value_str.size()) {
-        update_str(initial_value_str);
+      } else {
+        update_str(line);
       }
+    }
 
+    return 0;
+  });
+
+  // emit
+  CLI::App *emit = app.add_subcommand("emit", "register an event");
+  emit->add_option("path", path)->required();
+  std::string value_to_emit_str;
+  emit->add_option("value_to_emit", value_to_emit_str);
+  emit->footer("\nvalues to emit to will be read from stdin if"
+               "\nvalue_to_emit is not provided; type 'q' to quit");
+  emit->callback([&]() {
+    ESHETClient client(get_host_port());
+
+    Channel<Result> result_chan;
+
+    client.event_register(path, result_chan);
+    std::visit([](const auto &r) { return check_result(r); },
+               result_chan.read());
+
+    auto emit_str = [&](const std::string &value_str) {
+      auto zone = std::make_unique<msgpack::zone>();
+      msgpack::object value = json_str_to_msgpack(value_str, *zone);
+
+      client.event_emit(path, std::move(value), result_chan);
+      std::visit([](const auto &r) { return check_result(r); },
+                 result_chan.read());
+    };
+
+    if (value_to_emit_str.size()) {
+      // unlike with publish, it makes sense to emit a value then exit
+      emit_str(value_to_emit_str);
+    } else {
       std::string line;
-      while (std::getline(std::cin, line)) {
+      while (std::getline(std::cin, line))
         if (line.size() && line[0] == 'q')
           break;
-        else if (line.size() && line[0] == 'u') {
-          client.state_unknown(path, result_chan);
-          std::visit([](const auto &r) { return check_result(r); },
-                     result_chan.read());
-        } else {
-          update_str(line);
-        }
-      }
+        else
+          emit_str(line);
+    }
 
-      return 0;
-    });
-  }
-
-  {
-    std::string path;
-    std::string value_to_emit_str;
-    CLI::App *listen = app.add_subcommand("emit", "register an event");
-    listen->add_option("path", path)->required();
-    listen->add_option("value_to_emit", value_to_emit_str);
-    listen->footer("\nvalues to emit to will be read from stdin if"
-                   "\nvalue_to_emit is not provided; type 'q' to quit");
-    listen->callback([&]() {
-      ESHETClient client(get_host_port());
-
-      Channel<Result> result_chan;
-
-      client.event_register(path, result_chan);
-      std::visit([](const auto &r) { return check_result(r); },
-                 result_chan.read());
-
-      auto emit_str = [&](const std::string &value_str) {
-        auto zone = std::make_unique<msgpack::zone>();
-        msgpack::object value = json_str_to_msgpack(value_str, *zone);
-
-        client.event_emit(path, std::move(value), result_chan);
-        std::visit([](const auto &r) { return check_result(r); },
-                   result_chan.read());
-      };
-
-      if (value_to_emit_str.size()) {
-        emit_str(value_to_emit_str);
-      } else {
-        // unlike with publish, it makes sense to emit a value then exit
-        std::string line;
-        while (std::getline(std::cin, line))
-          if (line.size() && line[0] == 'q')
-            break;
-          else
-            emit_str(line);
-      }
-
-      return 0;
-    });
-  }
+    return 0;
+  });
 
   app.require_subcommand(1);
 
