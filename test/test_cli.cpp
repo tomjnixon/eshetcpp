@@ -78,4 +78,9 @@ TEST_CASE("cli call") {
     std::string out = run_eshet("call " NS "/action 5 '\"foo\"'");
     REQUIRE(out == "[5,\"foo\"]\n");
   };
+
+  SECTION("one arg with brackets and spaces") {
+    std::string out = run_eshet("call " NS "/action '[1, 2]'");
+    REQUIRE(out == "[[1,2]]\n");
+  };
 }
