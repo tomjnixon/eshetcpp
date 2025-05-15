@@ -189,7 +189,7 @@ private:
           throw ProtocolError(); // bad response to ping
         ping_timeout.reset();
       } break;
-      case 1: { // on_close
+      case 1: {          // on_close
         on_close.read(); // XXX: do something with this
         return;
       } break;
