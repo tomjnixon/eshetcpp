@@ -4,7 +4,6 @@
 #include <array>
 #include <cstdio>
 #include <iostream>
-#include <memory>
 #include <stdexcept>
 #include <string>
 
@@ -16,15 +15,14 @@ std::string run_eshet(const std::string &args) {
   std::string cmd = "ESHET_SERVER=localhost:11236 " ESHET_BIN " " + args;
   std::array<char, 128> buffer;
   std::string result;
-  std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd.c_str(), "r"),
-                                                pclose);
+  FILE *pipe = popen(cmd.c_str(), "r");
   if (!pipe)
     throw std::runtime_error("popen(" + cmd + ") failed");
 
-  while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr)
+  while (fgets(buffer.data(), buffer.size(), pipe) != nullptr)
     result += buffer.data();
 
-  int rv = pclose(pipe.release());
+  int rv = pclose(pipe);
   if (rv != 0) {
     std::cerr << result << std::endl;
     throw std::runtime_error("command returned " + std::to_string(rv) + ": " +
