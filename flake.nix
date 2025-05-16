@@ -21,6 +21,14 @@
           meta.mainProgram = "eshet";
         };
         packages.default = packages.eshetcpp;
+
+        devShells.eshetcpp = packages.eshetcpp.overrideAttrs (attrs: {
+          nativeBuildInputs = attrs.nativeBuildInputs ++ [
+            pkgs.clang-tools
+            pkgs.nixfmt-rfc-style
+          ];
+        });
+        devShells.default = devShells.eshetcpp;
       }
     );
 }
