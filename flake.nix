@@ -3,17 +3,20 @@
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
   inputs.flake-utils.url = "github:numtide/flake-utils";
+  inputs.eshetsrv.url = "github:tomjnixon/eshetsrv";
 
   outputs =
     {
       self,
       nixpkgs,
       flake-utils,
+      eshetsrv,
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
+        eshetsrv_bin = "${eshetsrv.packages.${system}.eshetsrv}/bin/eshetsrv_release";
       in
       rec {
         packages.eshetcpp = pkgs.stdenv.mkDerivation {
@@ -23,9 +26,10 @@
             pkgs.cmake
             pkgs.ninja
           ];
-          checkPhase = ''
-            ./test/test_msgpack
-            ./src/eshet --help
+
+          # TODO: make this a passthrough test?
+          preCheck = ''
+            RUNNER_LOG_DIR=$(pwd)/eshetsrv_logs ${eshetsrv_bin} daemon
           '';
           doCheck = true;
 
